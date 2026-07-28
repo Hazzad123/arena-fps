@@ -3,18 +3,21 @@
 # With this file in the repo you don't have to configure anything by hand —
 # Render reads it and creates the service. See DEPLOY.md for the click-through.
 #
-# Two settings here are load-bearing for this game specifically:
+# Running on the free plan. What that actually costs you:
 #
-#   plan: starter    The free plan spins the service down after 15 minutes idle
-#                    and takes ~50s to cold start. Rooms live in the server's
-#                    memory, so a spin-down ends every match in progress and the
-#                    first person to open the link waits a minute. Starter
-#                    ($7/month at time of writing) stays awake.
+# The service spins down after 15 minutes with no traffic, and the next request
+# takes ~50 seconds to wake it. That sounds worse than it is here — the spin-down
+# only happens when nobody is playing, and active players count as traffic, so it
+# won't drop a live match. The real cost is that the first person to open the link
+# after a quiet spell waits about a minute.
 #
-#   numInstances: 1  A second instance would be a second, invisible set of rooms:
-#                    your coworkers would get a code that the other instance has
-#                    never heard of. Never scale this above 1 without moving room
-#                    state into Redis first.
+# Upgrading to `starter` ($7/month at time of writing) buys you no cold start. It
+# does NOT make matches survive restarts — rooms live in process memory either
+# way. If you upgrade, also re-add `numInstances: 1` below: a second instance
+# would be a second invisible set of rooms, and someone would share a code the
+# other instance has never heard of. Scaling past one needs room state in Redis
+# first. (The free plan is single-instance anyway, and `numInstances` is a
+# paid-plan-only field, so it's left out here.)
 
 services:
   - type: web
@@ -23,13 +26,12 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
 
-    plan: starter
+    plan: free
     # Closest Render region to the UK. Others: oregon, ohio, virginia, singapore.
     # Latency is the one performance factor you actually control here, so pick
     # whichever is nearest your office.
     region: frankfurt
 
-    numInstances: 1
     healthCheckPath: /api/health
     autoDeploy: true
 

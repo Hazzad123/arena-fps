@@ -48,17 +48,32 @@ curl https://arena-xxxx.onrender.com/api/health
 
 ## Things that will bite you if you don't know them
 
-**The blueprint asks for the Starter plan ($7/month), on purpose.** Render's free
-tier spins a service down after 15 minutes of inactivity and takes ~50 seconds to
-wake up. For this game that means every in-progress match dies when it sleeps,
-and the first coworker to open the link sits on a blank page for a minute. If
-you'd rather try it free first, change `plan: starter` to `plan: free` in
-`render.yaml` — just expect the cold starts.
+**It's on the free plan, and the cold start is the only real downside.** Render
+spins a free service down after 15 minutes with no traffic, and the next request
+takes ~50 seconds to wake it.
 
-**Never scale past one instance.** `numInstances: 1` is set deliberately. Rooms
-live in the server process's memory, so a second instance is a second invisible
-set of rooms — someone would share a code that the other instance has never heard
-of. If you ever genuinely need to scale, room state has to move into Redis first.
+That matters less than it sounds. The spin-down only happens when nobody is
+playing, and players generate traffic, so it won't drop a live match out from
+under you. The cost is that the first person to open the link after a quiet spell
+waits about a minute. In practice: open the link yourself a minute before you tell
+everyone, and nobody notices.
+
+If the wait does annoy you, two options:
+
+- **Keep it warm for free.** Point a free uptime pinger (uptimerobot.com,
+  cron-job.org) at `https://your-app.onrender.com/api/health` every 10 minutes.
+  That counts as traffic, so it never sleeps. Free web services get 750
+  instance-hours a month, which is just about a full month of uptime for one
+  service — so this fits, but it is the entire allowance.
+- **Pay the $7.** Render's Starter plan doesn't sleep. Worth being clear about
+  what that does and doesn't buy: it removes the cold start, it does **not** make
+  matches survive a restart or redeploy. Rooms live in process memory either way.
+
+**Never scale past one instance.** The free plan is single-instance, so this is
+only a concern if you upgrade — at which point add `numInstances: 1` to
+`render.yaml`. Rooms live in the server process's memory, so a second instance is
+a second invisible set of rooms: someone would share a code the other instance has
+never heard of. Genuinely scaling this needs room state moved into Redis first.
 
 **A redeploy ends live matches.** Same reason. Push during lunch, not mid-game.
 
