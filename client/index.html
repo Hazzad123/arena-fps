@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Arena — browser FPS</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+
+    <!-- ================= in-game HUD ================= -->
+    <div id="hud" class="hidden">
+      <div id="crosshair"><span></span><span></span><span></span><span></span><em></em></div>
+      <div id="hitmarker"></div>
+      <div id="damage-vignette"></div>
+
+      <!-- sniper optic: black surround with a lens cut out, plus a reticle -->
+      <div id="scope" class="hidden">
+        <div id="scope-mask"></div>
+        <div id="scope-reticle">
+          <span class="arm top"></span><span class="arm bottom"></span>
+          <span class="arm left"></span><span class="arm right"></span>
+          <span class="tick t"></span><span class="tick b"></span>
+          <span class="tick l"></span><span class="tick r"></span>
+          <em></em>
+        </div>
+      </div>
+
+      <div id="hud-top">
+        <div id="score-a" class="team-score">0</div>
+        <div id="round-timer">3:00</div>
+        <div id="score-b" class="team-score">0</div>
+      </div>
+      <div id="hud-state"></div>
+
+      <div id="killfeed"></div>
+
+      <div id="hud-bottom-left">
+        <div id="health-bar"><div id="health-fill"></div></div>
+        <div id="health-num">100</div>
+      </div>
+
+      <div id="hud-bottom-right">
+        <div id="weapon-name">Assault Rifle</div>
+        <div id="ammo"><span id="ammo-mag">30</span></div>
+        <div id="reload-hint" class="hidden">RELOADING</div>
+      </div>
+
+      <div id="practice-stats" class="hidden">
+        <div class="pr-row"><span>Hits</span><b id="pr-hits">0</b></div>
+        <div class="pr-row"><span>Shots</span><b id="pr-shots">0</b></div>
+        <div class="pr-row"><span>Accuracy</span><b id="pr-acc">—</b></div>
+        <div class="pr-row"><span>Best streak</span><b id="pr-streak">0</b></div>
+        <div class="pr-hint">R reload · T reset targets · Esc menu</div>
+      </div>
+
+      <!-- weapon rack: populated from the weapon table, so it can't fall out of
+           sync with what the number keys actually do -->
+      <div id="weapon-rack" class="hidden"></div>
+
+      <div id="respawn" class="hidden">
+        <div class="big">DOWN</div>
+        <div id="respawn-by"></div>
+        <div id="respawn-timer"></div>
+      </div>
+
+      <div id="scoreboard" class="hidden"></div>
+    </div>
+
+    <!-- ================= menu ================= -->
+    <div id="menu">
+      <div id="menu-inner">
+        <h1>ARENA</h1>
+        <p class="tagline">Browser FPS. No accounts, no downloads. Share a link and go.</p>
+
+        <label class="field">
+          <span>Your name</span>
+          <input id="nickname" maxlength="14" autocomplete="off" spellcheck="false" placeholder="pick a name" />
+        </label>
+
+        <div class="menu-actions">
+          <button id="btn-quickplay" class="primary">Quick play</button>
+          <button id="btn-practice" class="ghost">Practice range</button>
+        </div>
+
+        <div class="divider"><span>or</span></div>
+
+        <div class="room-row">
+          <input id="room-code" maxlength="4" autocomplete="off" spellcheck="false" placeholder="CODE" />
+          <button id="btn-join">Join</button>
+        </div>
+
+        <div class="create-row">
+          <select id="mode-select">
+            <option value="tdm">Team Deathmatch</option>
+            <option value="ffa">Free-for-all</option>
+            <option value="gungame">Gun Game</option>
+          </select>
+          <button id="btn-create">Create room</button>
+        </div>
+
+        <div id="menu-error" class="hidden"></div>
+
+        <details id="settings">
+          <summary>Settings</summary>
+          <label class="slider">
+            <span>Mouse sensitivity <b id="sens-val">1.00</b></span>
+            <input id="sens" type="range" min="0.2" max="3" step="0.05" />
+          </label>
+          <label class="slider">
+            <span>Field of view <b id="fov-val">80</b></span>
+            <input id="fov" type="range" min="60" max="110" step="1" />
+          </label>
+          <label class="slider">
+            <span>Volume <b id="vol-val">70</b></span>
+            <input id="vol" type="range" min="0" max="100" step="1" />
+          </label>
+          <label class="check">
+            <input id="invert-y" type="checkbox" />
+            <span>Invert vertical look</span>
+          </label>
+        </details>
+      </div>
+      <footer id="menu-footer"></footer>
+    </div>
+
+    <!-- ================= lobby ================= -->
+    <div id="lobby" class="hidden">
+      <div id="lobby-inner">
+        <div class="lobby-head">
+          <div>
+            <div class="label">Room code</div>
+            <div id="lobby-code">----</div>
+          </div>
+          <button id="btn-copy-link" class="ghost">Copy invite link</button>
+        </div>
+        <div id="lobby-mode" class="label"></div>
+        <div id="lobby-players"></div>
+        <div id="lobby-status">Waiting for players…</div>
+        <button id="btn-leave" class="ghost">Leave</button>
+      </div>
+    </div>
+
+    <!-- click-to-play catcher, shown when pointer lock is lost mid-match -->
+    <div id="resume" class="hidden"><div>Click to resume</div></div>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>

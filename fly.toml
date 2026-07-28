@@ -1,0 +1,47 @@
+# Fly.io config.
+#
+# Set `app` to the name `fly launch` gives you, and `primary_region` to whichever
+# region is nearest your office — for a fast-paced shooter, ping is the single
+# biggest thing you control here.
+#
+#   lhr = London, iad = Virginia, ams = Amsterdam, syd = Sydney
+#   full list: fly platform regions
+
+app = "arena-fps"
+primary_region = "lhr"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3000"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+
+  # Rooms live in this process's memory, so a second machine would be a second
+  # set of rooms that can't see each other. One machine, always on.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  # WebSockets are long-lived; don't let the proxy shut them down as idle.
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 200
+    soft_limit = 150
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/api/health"
+
+[[vm]]
+  # The server is doing almost nothing per player: 20Hz of JSON for at most eight
+  # people per room. The smallest shared VM is plenty.
+  size = "shared-cpu-1x"
+  memory = "512mb"

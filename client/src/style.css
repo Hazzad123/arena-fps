@@ -1,0 +1,843 @@
+:root {
+  --bg: #0c0e12;
+  --panel: #14171e;
+  --panel-2: #1b1f28;
+  --line: #272c38;
+  --text: #e6e9ef;
+  --muted: #8b93a5;
+  --accent: #e0a63c;
+  --team-a: #4a90d9;
+  --team-b: #d95a4a;
+  --good: #6cc06c;
+  --bad: #d9534f;
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+canvas#game {
+  position: fixed;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.hidden {
+  display: none !important;
+}
+
+button {
+  font: inherit;
+  font-weight: 600;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 0.7rem 1.1rem;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, transform 0.08s;
+}
+button:hover {
+  background: #232833;
+  border-color: #38404f;
+}
+button:active {
+  transform: translateY(1px);
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #17130a;
+}
+button.primary:hover {
+  background: #eeb44a;
+}
+button.ghost {
+  background: transparent;
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+input,
+select {
+  font: inherit;
+  background: #0f1218;
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 0.7rem 0.85rem;
+  border-radius: 8px;
+  width: 100%;
+}
+input:focus,
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ============================== menu ============================== */
+
+#menu,
+#lobby {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 30%, #1b2130 0%, #0a0c10 70%);
+  z-index: 30;
+}
+
+#menu-inner,
+#lobby-inner {
+  width: min(92vw, 420px);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1.75rem;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+
+#menu h1 {
+  font-size: 2.6rem;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  text-align: center;
+  margin-bottom: 0.3rem;
+}
+
+.tagline {
+  color: var(--muted);
+  font-size: 0.86rem;
+  text-align: center;
+  margin-bottom: 1.5rem;
+  line-height: 1.5;
+}
+
+.field {
+  display: block;
+  margin-bottom: 1rem;
+}
+.field > span {
+  display: block;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+  margin-bottom: 0.4rem;
+}
+
+.menu-actions {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1.15rem 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+.room-row,
+.create-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+
+#room-code {
+  text-transform: uppercase;
+  letter-spacing: 0.4em;
+  font-family: var(--mono);
+  font-size: 1.15rem;
+  text-align: center;
+  font-weight: 700;
+}
+
+#menu-error {
+  margin-top: 0.9rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 8px;
+  background: rgba(217, 83, 79, 0.12);
+  border: 1px solid rgba(217, 83, 79, 0.35);
+  color: #f2a7a4;
+  font-size: 0.84rem;
+}
+
+#settings {
+  margin-top: 1.3rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.9rem;
+}
+#settings summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+#settings summary:hover {
+  color: var(--text);
+}
+.slider {
+  display: block;
+  margin-top: 0.9rem;
+}
+.slider > span {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+.slider b {
+  color: var(--text);
+  font-family: var(--mono);
+}
+.slider input[type='range'] {
+  padding: 0;
+  accent-color: var(--accent);
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 0.9rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+.check input {
+  width: auto;
+  accent-color: var(--accent);
+}
+
+#menu-footer {
+  margin-top: 1rem;
+  color: #555d6e;
+  font-size: 0.72rem;
+  text-align: center;
+  max-width: 420px;
+  line-height: 1.5;
+}
+
+/* ============================== lobby ============================== */
+
+.lobby-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+  color: var(--muted);
+}
+#lobby-code {
+  font-family: var(--mono);
+  font-size: 2.4rem;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  color: var(--accent);
+}
+#lobby-mode {
+  margin-bottom: 1rem;
+}
+#lobby-players {
+  display: grid;
+  gap: 0.4rem;
+  margin-bottom: 1.1rem;
+}
+.lobby-player {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+.lobby-player .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+.lobby-player .you {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+#lobby-status {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin-bottom: 1.1rem;
+  text-align: center;
+}
+
+/* ============================== HUD ============================== */
+
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  font-variant-numeric: tabular-nums;
+}
+
+#crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 26px;
+  height: 26px;
+  transform: translate(-50%, -50%);
+}
+#crosshair span {
+  position: absolute;
+  background: #fff;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.9);
+  transition: all 0.06s linear;
+}
+/* four ticks around a centre dot; the gap grows with spread */
+#crosshair span:nth-child(1),
+#crosshair span:nth-child(2) {
+  width: 2px;
+  height: 7px;
+  left: 12px;
+}
+#crosshair span:nth-child(1) {
+  top: calc(50% - 7px - var(--spread, 4px));
+}
+#crosshair span:nth-child(2) {
+  top: calc(50% + var(--spread, 4px));
+}
+#crosshair span:nth-child(3),
+#crosshair span:nth-child(4) {
+  height: 2px;
+  width: 7px;
+  top: 12px;
+}
+#crosshair span:nth-child(3) {
+  left: calc(50% - 7px - var(--spread, 4px));
+}
+#crosshair span:nth-child(4) {
+  left: calc(50% + var(--spread, 4px));
+}
+#crosshair em {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  width: 2px;
+  height: 2px;
+  background: #fff;
+  opacity: 0.85;
+}
+#crosshair.hide-cross span {
+  opacity: 0;
+}
+
+#hitmarker {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 22px;
+  height: 22px;
+  transform: translate(-50%, -50%) rotate(45deg);
+  opacity: 0;
+}
+#hitmarker::before,
+#hitmarker::after {
+  content: '';
+  position: absolute;
+  background: #fff;
+  box-shadow: 0 0 3px #000;
+}
+#hitmarker::before {
+  left: 10px;
+  top: 0;
+  width: 2px;
+  height: 100%;
+}
+#hitmarker::after {
+  top: 10px;
+  left: 0;
+  height: 2px;
+  width: 100%;
+}
+#hitmarker.show {
+  animation: hm 0.22s ease-out;
+}
+#hitmarker.kill::before,
+#hitmarker.kill::after {
+  background: var(--bad);
+}
+@keyframes hm {
+  0% {
+    opacity: 1;
+    transform: translate(-50%, -50%) rotate(45deg) scale(0.6);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(45deg) scale(1.4);
+  }
+}
+
+#damage-vignette {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 0.35s;
+  background: radial-gradient(circle at var(--dmg-x, 50%) var(--dmg-y, 50%), rgba(200, 30, 30, 0.55), transparent 55%);
+}
+
+#hud-top {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  background: rgba(10, 12, 16, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  padding: 0.45rem 1rem;
+  border-radius: 10px;
+  backdrop-filter: blur(6px);
+}
+#round-timer {
+  font-family: var(--mono);
+  font-size: 1.35rem;
+  font-weight: 700;
+  min-width: 4.2ch;
+  text-align: center;
+}
+#round-timer.urgent {
+  color: var(--bad);
+}
+.team-score {
+  font-family: var(--mono);
+  font-size: 1.5rem;
+  font-weight: 800;
+  min-width: 2.5ch;
+  text-align: center;
+}
+#score-a {
+  color: var(--team-a);
+}
+#score-b {
+  color: var(--team-b);
+}
+
+#hud-state {
+  position: absolute;
+  top: 76px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.9rem;
+  color: var(--accent);
+  letter-spacing: 0.06em;
+  text-shadow: 0 2px 8px #000;
+}
+
+#killfeed {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  align-items: flex-end;
+}
+.kf {
+  background: rgba(10, 12, 16, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  padding: 0.3rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  animation: kfin 0.18s ease-out;
+}
+@keyframes kfin {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+}
+.kf .w {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+.kf.fade {
+  opacity: 0;
+  transition: opacity 0.5s;
+}
+
+#hud-bottom-left {
+  position: absolute;
+  left: 26px;
+  bottom: 26px;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+}
+#health-bar {
+  width: 190px;
+  height: 9px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+  overflow: hidden;
+}
+#health-fill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, #7ec97e, #4f9c4f);
+  transition: width 0.14s linear, background 0.3s;
+}
+#health-fill.low {
+  background: linear-gradient(90deg, #e07a5f, #c1443f);
+}
+#health-num {
+  font-family: var(--mono);
+  font-size: 1.5rem;
+  font-weight: 700;
+  text-shadow: 0 2px 8px #000;
+}
+
+#hud-bottom-right {
+  position: absolute;
+  right: 26px;
+  bottom: 26px;
+  text-align: right;
+}
+#weapon-name {
+  font-size: 0.82rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+  margin-bottom: 0.1rem;
+}
+#ammo {
+  font-family: var(--mono);
+  font-size: 2rem;
+  font-weight: 800;
+  line-height: 1;
+  text-shadow: 0 2px 8px #000;
+}
+#ammo.empty {
+  color: var(--bad);
+}
+#reload-hint {
+  font-size: 0.78rem;
+  color: var(--accent);
+  letter-spacing: 0.1em;
+  margin-top: 0.25rem;
+}
+
+#practice-stats {
+  position: absolute;
+  top: 90px;
+  left: 26px;
+  background: rgba(10, 12, 16, 0.66);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 0.75rem 0.9rem;
+  min-width: 180px;
+  backdrop-filter: blur(6px);
+}
+.pr-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1.5rem;
+  font-size: 0.84rem;
+  padding: 0.16rem 0;
+  color: var(--muted);
+}
+.pr-row b {
+  color: var(--text);
+  font-family: var(--mono);
+}
+.pr-hint {
+  margin-top: 0.55rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--line);
+  font-size: 0.71rem;
+  color: #5f6879;
+  line-height: 1.45;
+}
+
+/* ---------------------------- sniper scope ---------------------------- */
+
+#scope {
+  position: absolute;
+  inset: 0;
+}
+/* Black surround with a circular lens cut out of it, sized to the short edge. */
+#scope-mask {
+  position: absolute;
+  inset: 0;
+  background: #000;
+  -webkit-mask: radial-gradient(circle at 50% 50%, transparent 0 min(37vh, 37vw), #000 calc(min(37vh, 37vw) + 1px));
+  mask: radial-gradient(circle at 50% 50%, transparent 0 min(37vh, 37vw), #000 calc(min(37vh, 37vw) + 1px));
+}
+/* A soft inner shadow at the lens edge, so it reads as glass not a hole. */
+#scope-mask::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(min(37vh, 37vw) * 2);
+  height: calc(min(37vh, 37vw) * 2);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  box-shadow: inset 0 0 60px 18px rgba(0, 0, 0, 0.85);
+}
+#scope-reticle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: calc(min(37vh, 37vw) * 2);
+  height: calc(min(37vh, 37vw) * 2);
+}
+#scope-reticle span {
+  position: absolute;
+  background: rgba(10, 12, 10, 0.9);
+}
+/* Four separate arms, each stopping short of the middle so the aim point stays
+   clear. Drawn as four elements rather than two plus a box-shadow, because
+   box-shadow offsets must be lengths — a percentage there is invalid and
+   silently drops the second half of each line. */
+#scope-reticle .arm.top {
+  left: 50%;
+  top: 0;
+  width: 1px;
+  height: 42%;
+}
+#scope-reticle .arm.bottom {
+  left: 50%;
+  bottom: 0;
+  width: 1px;
+  height: 42%;
+}
+#scope-reticle .arm.left {
+  top: 50%;
+  left: 0;
+  height: 1px;
+  width: 42%;
+}
+#scope-reticle .arm.right {
+  top: 50%;
+  right: 0;
+  height: 1px;
+  width: 42%;
+}
+#scope-reticle .tick {
+  background: rgba(12, 14, 12, 0.7);
+}
+#scope-reticle .tick.t,
+#scope-reticle .tick.b {
+  left: calc(50% - 5px);
+  width: 10px;
+  height: 1px;
+}
+#scope-reticle .tick.t {
+  top: 30%;
+}
+#scope-reticle .tick.b {
+  top: 70%;
+}
+#scope-reticle .tick.l,
+#scope-reticle .tick.r {
+  top: calc(50% - 5px);
+  height: 10px;
+  width: 1px;
+}
+#scope-reticle .tick.l {
+  left: 30%;
+}
+#scope-reticle .tick.r {
+  left: 70%;
+}
+#scope-reticle em {
+  position: absolute;
+  left: calc(50% - 1px);
+  top: calc(50% - 1px);
+  width: 2px;
+  height: 2px;
+  background: #c1392b;
+  border-radius: 50%;
+}
+
+/* ---------------------------- weapon rack ---------------------------- */
+
+#weapon-rack {
+  position: absolute;
+  right: 26px;
+  bottom: 110px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  align-items: flex-end;
+}
+.wr-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.28rem 0.6rem;
+  border-radius: 6px;
+  background: rgba(10, 12, 16, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.8rem;
+  color: var(--muted);
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.wr-item .key {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  min-width: 1.2ch;
+  text-align: center;
+  padding: 0.05rem 0.25rem;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.07);
+}
+.wr-item.active {
+  color: var(--text);
+  background: rgba(224, 166, 60, 0.16);
+  border-color: rgba(224, 166, 60, 0.5);
+}
+.wr-item.active .key {
+  background: var(--accent);
+  color: #17130a;
+}
+
+#respawn {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 9, 12, 0.55);
+  gap: 0.4rem;
+}
+#respawn .big {
+  font-size: 2.6rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  color: var(--bad);
+}
+#respawn-by {
+  color: var(--muted);
+}
+#respawn-timer {
+  font-family: var(--mono);
+  font-size: 1.1rem;
+  margin-top: 0.5rem;
+}
+
+#scoreboard {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(92vw, 560px);
+  background: rgba(12, 14, 19, 0.93);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1.25rem;
+  backdrop-filter: blur(10px);
+}
+#scoreboard h2 {
+  font-size: 1.1rem;
+  margin-bottom: 0.9rem;
+  letter-spacing: 0.08em;
+}
+#scoreboard table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+#scoreboard th {
+  text-align: left;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  padding-bottom: 0.5rem;
+  font-weight: 600;
+}
+#scoreboard td {
+  padding: 0.34rem 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+#scoreboard td.num {
+  text-align: right;
+  font-family: var(--mono);
+  width: 4.5ch;
+}
+#scoreboard tr.me {
+  color: var(--accent);
+  font-weight: 700;
+}
+#scoreboard .swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 0.5rem;
+}
+
+#resume {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 9, 12, 0.72);
+  cursor: pointer;
+  font-size: 1.15rem;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}

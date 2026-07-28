@@ -1,0 +1,28 @@
+{
+  "name": "arena-fps",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser multiplayer arena FPS — no accounts, share a link, 3 minute rounds.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "node --watch server/index.js",
+    "dev:client": "vite",
+    "build": "vite build",
+    "start": "NODE_ENV=production node server/index.js",
+    "test": "node --test \"test/**/*.test.js\"",
+    "bots": "node server/bot.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "three": "^0.185.1",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "vite": "^7.1.5"
+  }
+}
