@@ -9,13 +9,14 @@ import {
   MAX_HEALTH, RESPAWN_DELAY_MS, SPAWN_PROTECTION_MS, REGEN_DELAY_MS,
   REGEN_PER_SECOND, FALL_DAMAGE_MIN_SPEED, FALL_DAMAGE_PER_SPEED,
   PLAYER_HEIGHT, PLAYER_RADIUS, EMPTY_ROOM_TTL_MS, LOBBY_GRACE_MS,
+  BARREL_HITS, BARREL_DAMAGE, BARREL_RADIUS, BARREL_CHAIN_RADIUS, BARREL_CHAIN_LIMIT,
 } from '../shared/constants.js';
 import { S2C, PHASE, FLAG, MODES, encode, encodeSnapshot } from '../shared/protocol.js';
 import { getMap, nextMap, ROTATION } from '../shared/maps/index.js';
 import { getWeapon, CLASSES, DEFAULT_CLASS } from '../shared/weapons.js';
-import { pushOutOfSolids, playerOverlapsAny } from '../shared/collision.js';
+import { pushOutOfSolids, playerOverlapsAny, hasLineOfSight } from '../shared/collision.js';
 import * as modes from './modes.js';
-import { validateMove, validateHit, validateFireRate, capPelletCount, heightOf } from './validate.js';
+import { validateMove, validateHit, validateFireRate, capPelletCount, heightOf, eyeOf } from './validate.js';
 
 const TICK_MS = 1000 / SERVER_TICK_HZ;
 
@@ -38,11 +39,14 @@ export class Room {
 
     this.mapId = ROTATION[Math.floor(Math.random() * ROTATION.length)];
     this.map = getMap(this.mapId);
+    this.resetBarrels();
 
     this.phase = PHASE.LOBBY;
     this.phaseEndsAt = 0;
     this.tickCount = 0;
     this.emptySince = Date.now();
+    this.empty = false;
+    this.closed = false;
     this.lastResult = null;
 
     // Lobby: whoever got here first picks the mode and the map and can force the
@@ -120,6 +124,8 @@ export class Room {
       teamScores: this.teamScores,
       inventory: player.inventory,
       lobby: this.lobbyState(),
+      // Barrels already destroyed, so a latecomer doesn't see ones that are gone.
+      barrelsGone: this.destroyedBarrels(),
     });
 
     this.broadcastRoster();
@@ -139,10 +145,16 @@ export class Room {
     this.regroupRequests.delete(id);
 
     if (this.players.size === 0) {
+      // Last one out: end the match and mark the room for immediate closure.
+      // Previously it sat in the lobby for a 60s TTL, still ticking 20 times a
+      // second and still holding its code, which is a slow leak on a server
+      // that's meant to be one small always-on instance.
       this.emptySince = Date.now();
       this.phase = PHASE.LOBBY;
       this.hostId = null;
       this.graceEndsAt = 0;
+      this.lastResult = null;
+      this.empty = true;
     } else {
       modes.rebalance(this);
       this.ensureHost();
@@ -156,12 +168,22 @@ export class Room {
     }
   }
 
+  /**
+   * Ready to be torn down. An empty room qualifies straight away — there's
+   * nothing to come back to, since a rejoin would create a fresh room anyway.
+   * The TTL is kept only as a backstop for a room that somehow emptied without
+   * going through removePlayer.
+   */
   isExpired(now = Date.now()) {
-    return this.players.size === 0 && this.emptySince > 0 && now - this.emptySince > EMPTY_ROOM_TTL_MS;
+    if (this.players.size > 0) return false;
+    if (this.empty) return true;
+    return this.emptySince > 0 && now - this.emptySince > EMPTY_ROOM_TTL_MS;
   }
 
   dispose() {
     clearInterval(this.timer);
+    this.timer = null;
+    this.closed = true;
   }
 
   roster() {
@@ -375,6 +397,8 @@ export class Room {
 
   beginRound() {
     modes.resetScores(this);
+    this.resetBarrels();
+    this.broadcast(S2C.BARRELS, { gone: [] });
     this.graceEndsAt = 0;
     this.regroupRequests.clear();
     for (const p of this.players.values()) {
@@ -415,9 +439,102 @@ export class Room {
     this.broadcast(S2C.PHASE, this.phasePayload());
   }
 
+  // ------------------------------------------------------------------ barrels
+  //
+  // Server-authoritative, because they deal damage. The client reports "I shot
+  // barrel 47" the same way it reports hitting a player, and everything that
+  // matters — the hit count, whether it blows, who gets the kill — is decided
+  // here.
+
+  resetBarrels() {
+    this.barrels = new Map();
+    for (const b of this.map.barrels) this.barrels.set(b.index, { hits: 0, exploded: false });
+  }
+
+  /** Indices of barrels already destroyed, for syncing a joining client. */
+  destroyedBarrels() {
+    const out = [];
+    for (const [index, state] of this.barrels ?? []) if (state.exploded) out.push(index);
+    return out;
+  }
+
+  hitBarrel(index, shooter) {
+    const state = this.barrels?.get(index);
+    if (!state || state.exploded) return;
+
+    const barrel = this.map.barrels.find((b) => b.index === index);
+    if (!barrel) return;
+
+    // Same loose validation as a player hit: it has to be in range and visible.
+    const eye = eyeOf(shooter);
+    const distance = Math.hypot(
+      barrel.pos[0] - eye[0],
+      barrel.pos[1] - eye[1],
+      barrel.pos[2] - eye[2],
+    );
+    if (distance > 250) return;
+    if (!hasLineOfSight(eye, barrel.pos, this.map.solids, 1.2)) return;
+
+    state.hits += 1;
+    if (state.hits >= BARREL_HITS) {
+      this.explodeBarrel(barrel, shooter, 0);
+    } else {
+      this.broadcast(S2C.BARREL_HIT, { index, hits: state.hits, at: barrel.pos });
+    }
+  }
+
+  explodeBarrel(barrel, shooter, depth) {
+    const state = this.barrels.get(barrel.index);
+    if (!state || state.exploded) return;
+    state.exploded = true;
+
+    this.broadcast(S2C.EXPLODE, { index: barrel.index, at: barrel.pos });
+
+    for (const victim of this.players.values()) {
+      if (!victim.alive) continue;
+
+      const centre = [victim.pos[0], victim.pos[1] + heightOf(victim) * 0.55, victim.pos[2]];
+      const distance = Math.hypot(
+        centre[0] - barrel.pos[0],
+        centre[1] - barrel.pos[1],
+        centre[2] - barrel.pos[2],
+      );
+      if (distance > BARREL_RADIUS) continue;
+
+      // A wall between you and the blast should protect you, which is what makes
+      // barrels a positional threat rather than an area denial ability.
+      if (!hasLineOfSight(barrel.pos, centre, this.map.blastSolids, 0.9)) continue;
+
+      // You can absolutely blow yourself up. Teammates are still protected,
+      // matching friendly fire being off everywhere else.
+      const isSelf = shooter && victim.id === shooter.id;
+      if (!isSelf && shooter && !modes.canDamage(this, shooter, victim)) continue;
+
+      const damage = Math.round(BARREL_DAMAGE * (1 - distance / BARREL_RADIUS));
+      if (damage <= 0) continue;
+      this.applyDamage(victim, shooter, damage, 'barrel');
+    }
+
+    // Chain reaction. Bounded by depth so a tightly packed cluster can't recurse
+    // without end.
+    if (depth >= BARREL_CHAIN_LIMIT) return;
+    for (const other of this.map.barrels) {
+      if (other.index === barrel.index) continue;
+      const st = this.barrels.get(other.index);
+      if (!st || st.exploded) continue;
+      const d = Math.hypot(
+        other.pos[0] - barrel.pos[0],
+        other.pos[1] - barrel.pos[1],
+        other.pos[2] - barrel.pos[2],
+      );
+      if (d <= BARREL_CHAIN_RADIUS) this.explodeBarrel(other, shooter, depth + 1);
+    }
+  }
+
   rotateMap() {
     this.mapId = nextMap(this.mapId);
     this.map = getMap(this.mapId);
+    this.resetBarrels();
   }
 
   /**
@@ -606,17 +723,28 @@ export class Room {
       });
       if (!check.ok) continue;
 
-      damageByVictim.set(victim, (damageByVictim.get(victim) ?? 0) + check.damage);
+      const acc = damageByVictim.get(victim) ?? { amount: 0, head: false };
+      acc.amount += check.damage;
+      // A shotgun blast can land pellets in several zones at once. If any of them
+      // hit the head, the shot reads as a headshot — that's the feedback the
+      // shooter is owed, and it's the pellet that did the most damage.
+      acc.head = acc.head || hit.z === 'head';
+      damageByVictim.set(victim, acc);
     }
 
-    for (const [victim, amount] of damageByVictim) {
-      this.applyDamage(victim, player, amount, weaponId);
+    for (const [victim, acc] of damageByVictim) {
+      this.applyDamage(victim, player, acc.amount, weaponId, acc.head);
+    }
+
+    // Barrels. Deduplicated so one shotgun blast counts as one hit, not eight.
+    if (Array.isArray(msg.b)) {
+      for (const index of new Set(msg.b)) this.hitBarrel(index | 0, player);
     }
   }
 
   // ---------------------------------------------------------------- damage
 
-  applyDamage(victim, attacker, amount, weaponId) {
+  applyDamage(victim, attacker, amount, weaponId, headshot = false) {
     if (!victim.alive) return;
 
     victim.health -= amount;
@@ -627,6 +755,11 @@ export class Room {
         target: victim.id,
         amount,
         lethal: victim.health <= 0,
+        head: headshot,
+        // The victim's position, so the shooter's client can put a damage number
+        // and a blood burst on them rather than in the middle of the screen.
+        at: [victim.pos[0], victim.pos[1] + heightOf(victim) * 0.62, victim.pos[2]],
+        name: victim.name,
       });
     }
 
@@ -638,10 +771,10 @@ export class Room {
       by: attacker ? attacker.name : weaponId,
     });
 
-    if (victim.health <= 0) this.killPlayer(victim, attacker, weaponId);
+    if (victim.health <= 0) this.killPlayer(victim, attacker, weaponId, headshot);
   }
 
-  killPlayer(victim, attacker, weaponId) {
+  killPlayer(victim, attacker, weaponId, headshot = false) {
     victim.alive = false;
     victim.health = 0;
     victim.respawnAt = Date.now() + RESPAWN_DELAY_MS;
@@ -666,7 +799,7 @@ export class Room {
       victim: victim.id,
       victimName: victim.name,
       weapon: weaponId,
-      headshot: false,
+      headshot,
     });
 
     this.broadcastRoster();
@@ -678,6 +811,7 @@ export class Room {
   // ------------------------------------------------------------------- tick
 
   tick() {
+    if (this.closed) return;
     const now = Date.now();
     this.tickCount++;
 

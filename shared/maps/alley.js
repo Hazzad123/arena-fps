@@ -7,7 +7,7 @@
 // Sightlines are deliberately short. Snipers are a liability here, shotguns are
 // king, and every corner is a coin flip.
 
-import { box, stairs, crateStack } from './helpers.js';
+import { barrel, box, stairs, crateStack } from './helpers.js';
 
 const C = {
   ground: 0x59544c,
@@ -110,6 +110,12 @@ function build() {
     );
     b.push(...crateStack({ x, z: z - side * 2.5, y: 3.8, size: 1.2, height: 1, color: C.wood, seed: 5 + side }));
   }
+
+  // A single explosive pair, tucked in opposite ring corners. On a map this small
+  // one barrel changes how a corner gets pushed, which is the whole point —
+  // scattering them everywhere would just make every fight a coin flip.
+  b.push(barrel(-13.5, 0, 0));
+  b.push(barrel(13.5, 0, 0));
 
   return b;
 }

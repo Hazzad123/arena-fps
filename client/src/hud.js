@@ -16,6 +16,7 @@ export function initHud() {
     'weapon-name', 'ammo', 'ammo-mag', 'reload-hint', 'practice-stats',
     'pr-hits', 'pr-shots', 'pr-acc', 'pr-streak', 'respawn', 'respawn-by',
     'respawn-timer', 'scoreboard', 'scope', 'weapon-rack',
+    'damage-numbers', 'kill-banner', 'minimap',
     'results', 'rs-headline', 'rs-score', 'rs-table', 'rs-next', 'rs-regroup',
   ];
   for (const id of ids) el[id] = document.getElementById(id);
@@ -69,6 +70,11 @@ export function highlightWeapon(weaponId) {
   }
 }
 
+/** The radar is match-only — the practice range has nobody to track. */
+export function setMinimapVisible(visible) {
+  el.minimap?.classList.toggle('hidden', !visible);
+}
+
 /** Show or hide the sniper optic. */
 export function setScoped(scoped) {
   el.scope.classList.toggle('hidden', !scoped);
@@ -110,12 +116,55 @@ export function updateCrosshair(spreadDeg, adsProgress, weaponId) {
 
 // ------------------------------------------------------------------ feedback
 
-export function hitmarker(kill = false) {
-  el.hitmarker.classList.remove('show', 'kill');
+/**
+ * Hitmarker. `kind` is 'hit', 'head' or 'kill' — three visually distinct states,
+ * because "I hit them", "I hit their head" and "they're dead" are three different
+ * pieces of information and a single white cross conveys none of them.
+ */
+export function hitmarker(kind = 'hit') {
+  el.hitmarker.classList.remove('show', 'kill', 'head');
   // Force a reflow so the animation restarts on rapid consecutive hits.
   void el.hitmarker.offsetWidth;
+  if (kind === 'kill') el.hitmarker.classList.add('kill');
+  else if (kind === 'head') el.hitmarker.classList.add('head');
   el.hitmarker.classList.add('show');
-  if (kill) el.hitmarker.classList.add('kill');
+}
+
+/**
+ * Floating damage number at a screen position, so the number appears over the
+ * player you hit rather than in the abstract middle of the display.
+ *
+ * Elements remove themselves when the animation ends — a burst of shotgun
+ * pellets can spawn several at once and none of them should outlive their fade.
+ */
+export function damageNumber(amount, screenX, screenY, kind = 'hit') {
+  const node = document.createElement('div');
+  node.className = `dmg-num${kind === 'hit' ? '' : ` ${kind}`}`;
+  node.textContent = Math.round(amount);
+  // A little horizontal scatter so simultaneous hits don't stack illegibly.
+  node.style.left = `${screenX + (Math.random() - 0.5) * 26}px`;
+  node.style.top = `${screenY}px`;
+  node.addEventListener('animationend', () => node.remove());
+  el['damage-numbers'].appendChild(node);
+
+  // Belt and braces: if the animation never fires (element hidden mid-flight),
+  // don't leak nodes into the layer forever.
+  setTimeout(() => node.remove(), 1500);
+}
+
+export function killBanner(name, headshot = false) {
+  el['kill-banner'].innerHTML = '';
+  const verb = document.createElement('div');
+  verb.className = 'verb';
+  verb.textContent = headshot ? 'Headshot' : 'Eliminated';
+  const who = document.createElement('div');
+  who.className = 'who';
+  who.textContent = name ?? '';
+  el['kill-banner'].append(verb, who);
+
+  el['kill-banner'].classList.remove('show');
+  void el['kill-banner'].offsetWidth;
+  el['kill-banner'].classList.add('show');
 }
 
 /**

@@ -27,6 +27,18 @@ export function prop(x, y, z, w, h, d, color, file) {
 }
 
 /**
+ * An explosive barrel: cover that stops being cover.
+ *
+ * Tagged separately from an ordinary prop so the server can give it hit points
+ * and the client knows to report shots against it. Place these deliberately and
+ * sparingly — a barrel is a decision the room has to play around, and a map
+ * littered with them is just a map where everything explodes.
+ */
+export function barrel(x, y, z, color = 0xb4472e) {
+  return box(x, y, z, 0.78, 1.02, 0.78, color, 'barrel:ExplodingBarrel');
+}
+
+/**
  * A staircase built from solid blocks.
  *
  * We have no sloped surfaces — the world is axis-aligned boxes only — so ramps

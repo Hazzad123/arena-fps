@@ -5,7 +5,9 @@
 // across a long session.
 
 import * as THREE from 'three';
-import { PHYSICS_DT, MIN_FOV, MAX_FOV, TEAMS, RESPAWN_DELAY_MS, MAX_PLAYERS } from '@shared/constants.js';
+import {
+  PHYSICS_DT, MIN_FOV, MAX_FOV, TEAMS, RESPAWN_DELAY_MS, MAX_PLAYERS, BARREL_RADIUS,
+} from '@shared/constants.js';
 import { getMap, mapList } from '@shared/maps/index.js';
 import { ALL_WEAPON_IDS, getWeapon, CLASSES, CLASS_IDS, DEFAULT_CLASS } from '@shared/weapons.js';
 import { raycastBoxes, raycastPlayers } from '@shared/collision.js';
@@ -13,7 +15,9 @@ import { C2S, S2C, PHASE, FLAG, MODE_NAMES } from '@shared/protocol.js';
 
 import { settings, saveSettings, ensureNickname } from './settings.js';
 import { initInput, input, requestLock, exitLock, onLockChange, consumePressed, consumeLook } from './input.js';
-import { createRenderer, createCamera, createWorld, loadMap, unloadMap } from './mapRenderer.js';
+import {
+  createRenderer, createCamera, createWorld, loadMap, unloadMap, scorchBarrel,
+} from './mapRenderer.js';
 import {
   createLocalPlayer, setLoadout, spawnAt, updateLocalPlayer, applyToCamera,
   currentWeapon, tryFire, handleWeaponInput, eyePosition,
@@ -23,6 +27,7 @@ import {
   renderWeaponView, resizeWeaponView, isScoped,
   createTracers, spawnTracer, updateTracers,
   createImpacts, spawnImpact, updateImpacts, muzzleWorldPosition,
+  createExplosions, spawnExplosion, updateExplosions,
 } from './weaponView.js';
 import * as hud from './hud.js';
 import {
@@ -31,6 +36,7 @@ import {
 import * as net from './net.js';
 import { createRemotePlayers, syncRemotePlayers, clearRemotePlayers, hitboxesFrom } from './remotePlayers.js';
 import * as audio from './audio.js';
+import { createMinimap, drawMinimap, noteGunfire, clearMinimap } from './minimap.js';
 
 // ---------------------------------------------------------------------- setup
 
@@ -43,8 +49,10 @@ const player = createLocalPlayer();
 const weaponView = createWeaponView();
 const tracers = createTracers(world.scene);
 const impacts = createImpacts(world.scene);
+const explosions = createExplosions(world.scene);
 const remotes = createRemotePlayers(world.scene);
 const connection = net.createNet();
+const minimap = createMinimap();
 
 initInput(canvas);
 hud.initHud();
@@ -85,6 +93,9 @@ const app = {
   deathAt: 0,
   killedBy: '',
   lastCountdownBeep: -1,
+  // Camera shake, decayed every frame. Explosions are the only thing that sets
+  // it; a blast you can feel is worth more than a bigger fireball.
+  shake: 0,
   wasReloading: false,
   lobbyNotice: '',
   lobbyNoticeTimer: null,
@@ -260,6 +271,7 @@ function applyMap(mapId) {
   app.map = getMap(mapId);
   loadMap(world, app.map);
   clearRemotePlayers(remotes);
+  clearMinimap(minimap);
 }
 
 function startPractice() {
@@ -278,6 +290,7 @@ function startPractice() {
   dom.lobby.classList.add('hidden');
   hud.showHud(true);
   hud.setPracticeMode(true);
+  hud.setMinimapVisible(false);
   hud.setStateBanner('');
   hud.updatePracticeStats(app.range.stats);
   hud.highlightWeapon(player.inventory[player.slotIndex]);
@@ -303,6 +316,7 @@ function enterMatch() {
   dom.lobby.classList.add('hidden');
   hud.showHud(true);
   hud.setPracticeMode(false);
+  hud.setMinimapVisible(true);
   hud.setTeamScoresVisible(app.match.mode === 'tdm');
   grabPointer();
 }
@@ -726,6 +740,8 @@ net.on(connection, S2C.JOINED, (msg) => {
   hud.setTeamScoresVisible(m.mode === 'tdm');
   hud.updateScores(m.teamScores.A, m.teamScores.B);
 
+  for (const index of msg.barrelsGone ?? []) scorchBarrel(world, index);
+
   if (msg.phase === PHASE.LIVE || msg.phase === PHASE.COUNTDOWN) enterMatch();
   else enterLobby();
 });
@@ -850,9 +866,21 @@ net.on(connection, S2C.DAMAGE, (msg) => {
     hud.damageIndicator(msg.from ? directionTo(msg.from) : null);
     if (msg.health <= 0) player.alive = false;
   } else {
-    // Server confirmed our hit landed.
-    hud.hitmarker(msg.lethal);
-    audio.playHitmarker(msg.lethal);
+    // Server confirmed our hit landed. Everything below is feedback for the
+    // shooter — it's the moment the game most needs to feel good, so it gets a
+    // marker, a sound, a number on the target and, on a kill, a banner.
+    const kind = msg.lethal ? 'kill' : msg.head ? 'head' : 'hit';
+    hud.hitmarker(kind);
+    audio.playHitmarker(kind);
+
+    if (msg.at) {
+      const screen = projectToScreen(msg.at);
+      if (screen) hud.damageNumber(msg.amount, screen.x, screen.y, kind);
+      // A burst of blood on the body reads at any distance, unlike a number.
+      spawnImpact(impacts, msg.at, performance.now(), 0xffffff, true);
+    }
+
+    if (msg.lethal) hud.killBanner(msg.name, msg.head);
   }
 });
 
@@ -892,6 +920,45 @@ net.on(connection, S2C.SHOTS, (msg) => {
   const eye = eyePosition(player);
   const { pan, distance } = audio.spatialise(origin, eye, player.yaw);
   audio.playShot(weapon.audio, { pan, distance });
+
+  // Radar mark wherever an enemy fired. Teammates don't give themselves away —
+  // otherwise a full lobby of friendlies floods the dial and hides the one mark
+  // that actually matters.
+  const shooter = app.match.roster.get(msg.id);
+  const friendly = app.match.mode === 'tdm' && shooter?.team && shooter.team === app.match.myTeam;
+  if (!friendly) noteGunfire(minimap, origin);
+});
+
+net.on(connection, S2C.BARREL_HIT, (msg) => {
+  // Not destroyed yet: a spark and a metallic clang so you know it's damaged and
+  // worth another shot.
+  const now = performance.now();
+  spawnImpact(impacts, msg.at, now, 0xffc46a);
+  const eye = eyePosition(player);
+  const { pan, distance } = audio.spatialise(msg.at, eye, player.yaw);
+  audio.playClick(0.6 + Math.random() * 0.15, { pan, distance });
+});
+
+net.on(connection, S2C.EXPLODE, (msg) => {
+  const now = performance.now();
+  spawnExplosion(explosions, msg.at, BARREL_RADIUS * 0.55, now);
+  scorchBarrel(world, msg.index);
+
+  const eye = eyePosition(player);
+  const { pan, distance } = audio.spatialise(msg.at, eye, player.yaw);
+  audio.playExplosion({ pan, distance });
+
+  // Shake falls off with distance, so a blast across the map is a rumble and one
+  // at your feet throws the camera.
+  const falloff = Math.max(0, 1 - distance / (BARREL_RADIUS * 3));
+  app.shake = Math.min(1, app.shake + falloff * falloff * 1.1);
+});
+
+net.on(connection, S2C.BARRELS, (msg) => {
+  // Round reset: every barrel is back, so drop the scorched visuals by reloading
+  // nothing — the map itself is reloaded on a phase change. Only the explicit
+  // "already gone" list needs applying.
+  for (const index of msg.gone ?? []) scorchBarrel(world, index);
 });
 
 function updateRoster(list) {
@@ -905,6 +972,21 @@ function updateRoster(list) {
   // enemies.
   const mine = app.match.roster.get(connection.myId);
   if (mine) app.match.myTeam = mine.team ?? null;
+}
+
+const tmpProject = new THREE.Vector3();
+
+/**
+ * World position to screen pixels, or null if it's behind the camera.
+ * Used to put damage numbers on the player you actually hit.
+ */
+function projectToScreen(worldPos) {
+  tmpProject.set(worldPos[0], worldPos[1], worldPos[2]).project(camera);
+  if (tmpProject.z > 1) return null;
+  return {
+    x: ((tmpProject.x + 1) / 2) * window.innerWidth,
+    y: ((1 - tmpProject.y) / 2) * window.innerHeight,
+  };
 }
 
 function directionTo(worldPos) {
@@ -1028,6 +1110,7 @@ function handleFiring(now, worldStates) {
 
   const hitboxes = worldStates ? hitboxesFrom(worldStates, connection.myId) : [];
   const reportedHits = [];
+  const barrelsHit = [];
   let hitAnything = false;
 
   for (const dir of shot.dirs) {
@@ -1068,11 +1151,18 @@ function handleFiring(now, worldStates) {
       } else if (nearest.kind === 'target') {
         const { damage } = registerHit(app.range, targetHit.target, now, targetHit.t, weapon);
         spawnImpact(impacts, end, now, 0xffffff, true);
-        hud.hitmarker(damage >= 100);
-        audio.playHitmarker(damage >= 100);
+        // A downed plate is the range's equivalent of a kill.
+        const kind = damage >= 100 ? 'kill' : 'hit';
+        hud.hitmarker(kind);
+        audio.playHitmarker(kind);
+        const screen = projectToScreen(end);
+        if (screen) hud.damageNumber(damage, screen.x, screen.y, kind);
         hitAnything = true;
       } else {
         spawnImpact(impacts, end, now);
+        // A barrel is an ordinary solid, so the wall raycast already found it —
+        // it just needs reporting so the server can count the hit.
+        if (wallHit?.box?.tag?.startsWith('barrel:')) barrelsHit.push(wallHit.box.index);
       }
     }
 
@@ -1092,6 +1182,7 @@ function handleFiring(now, worldStates) {
       origin: shot.origin,
       dir: shot.dirs[0],
       hits: reportedHits,
+      barrels: barrelsHit,
     });
   }
 }
@@ -1136,6 +1227,15 @@ function step(dt, now) {
   // Look is sampled once per frame, not per physics step, so a 200Hz mouse
   // doesn't turn faster than a 60Hz one.
   const look = consumeLook();
+
+  // Slow the aim down while sighted, most of all through the sniper's 4x optic.
+  // Without this, a magnified view multiplies every hand movement by the zoom
+  // factor and the scope becomes unusable — one flick crosses the whole screen.
+  const aimed = currentWeapon(player);
+  const adsScale = 1 + (aimed.adsSensitivity - 1) * player.adsProgress;
+  look.dx *= adsScale;
+  look.dy *= adsScale;
+
   player.yaw -= look.dx;
   player.pitch = Math.max(-Math.PI / 2 + 0.02, Math.min(Math.PI / 2 - 0.02, player.pitch - look.dy));
   app.lookDelta = look;
@@ -1222,12 +1322,32 @@ function step(dt, now) {
       });
     }
     updateMatchHud(now);
+    drawMinimap(minimap, {
+      map: app.map,
+      player,
+      states: worldStates,
+      myId: connection.myId,
+      mode: app.match.mode,
+      myTeam: app.match.myTeam,
+      roster: app.match.roster,
+    });
   }
 
   applyToCamera(player, camera, settings.fov);
+
+  // Explosion shake, applied after the camera is otherwise final. Rotational
+  // rather than positional so it can't shove the eye through a wall.
+  if (app.shake > 0.002) {
+    const k = app.shake * 0.035;
+    camera.rotation.x += (Math.random() - 0.5) * k;
+    camera.rotation.y += (Math.random() - 0.5) * k;
+    camera.rotation.z += (Math.random() - 0.5) * k * 1.6;
+  }
   updateWeaponView(weaponView, dt, now, player, app.lookDelta);
   updateTracers(tracers, now);
   updateImpacts(impacts, now);
+  updateExplosions(explosions, now);
+  app.shake *= Math.max(0, 1 - 6.5 * dt);
 
   const weapon = currentWeapon(player);
   hud.updateVitals(player.health);

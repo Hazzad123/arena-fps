@@ -7,7 +7,7 @@
 //
 // Symmetric about z=0. Team A spawns south (-z), Team B north (+z).
 
-import { box, enclose, stairs, rack, crateStack, mirror, platform, prop } from './helpers.js';
+import { barrel, box, crateStack, enclose, mirror, platform, prop, rack, stairs } from './helpers.js';
 
 const C = {
   floor: 0x8b8b93,
@@ -80,9 +80,10 @@ function build() {
     // sat directly on top of until the map tests said so.
     prop(-14, 0, -12, 3.35, 1.28, 0.92, C.crateB, 'SackTrench'),
     prop(5.5, 0, -17, 1.0, 1.66, 1.0, C.steel, 'GasTank'),
-    prop(-15.5, 0, -18.5, 0.78, 1.02, 0.78, C.crateA, 'ExplodingBarrel'),
-    prop(-16.7, 0, -19.3, 0.78, 1.02, 0.78, C.crateA, 'ExplodingBarrel'),
-    prop(15.5, 0, -8, 0.78, 1.02, 0.78, C.crateA, 'ExplodingBarrel'),
+    // Explosive. Two together so shooting one takes the other with it.
+    barrel(-15.5, 0, -18.5),
+    barrel(-16.7, 0, -19.3),
+    barrel(15.5, 0, -8),
   ];
   b.push(...cover, ...mirror(cover, 'z'));
 

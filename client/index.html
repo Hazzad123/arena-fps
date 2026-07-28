@@ -12,8 +12,15 @@
     <!-- ================= in-game HUD ================= -->
     <div id="hud" class="hidden">
       <div id="crosshair"><span></span><span></span><span></span><span></span><em></em></div>
-      <div id="hitmarker"></div>
+      <div id="hitmarker"><i></i></div>
+      <!-- Floating damage numbers, positioned over the player you hit. -->
+      <div id="damage-numbers"></div>
+      <div id="kill-banner"></div>
       <div id="damage-vignette"></div>
+
+      <!-- Radar. Geometry is baked once per map into an offscreen canvas; only
+           the moving dots are redrawn each frame. -->
+      <div id="minimap"><canvas id="minimap-canvas" width="360" height="360"></canvas></div>
 
       <!-- sniper optic: black surround with a lens cut out, plus a reticle -->
       <div id="scope" class="hidden">
