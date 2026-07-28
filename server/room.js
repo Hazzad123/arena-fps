@@ -8,11 +8,11 @@ import {
   SERVER_TICK_HZ, ROUND_MS, COUNTDOWN_MS, SCOREBOARD_MS, MIN_PLAYERS_TO_START,
   MAX_HEALTH, RESPAWN_DELAY_MS, SPAWN_PROTECTION_MS, REGEN_DELAY_MS,
   REGEN_PER_SECOND, FALL_DAMAGE_MIN_SPEED, FALL_DAMAGE_PER_SPEED,
-  PLAYER_HEIGHT, PLAYER_RADIUS, EMPTY_ROOM_TTL_MS,
+  PLAYER_HEIGHT, PLAYER_RADIUS, EMPTY_ROOM_TTL_MS, LOBBY_GRACE_MS,
 } from '../shared/constants.js';
-import { S2C, PHASE, FLAG, encode, encodeSnapshot } from '../shared/protocol.js';
+import { S2C, PHASE, FLAG, MODES, encode, encodeSnapshot } from '../shared/protocol.js';
 import { getMap, nextMap, ROTATION } from '../shared/maps/index.js';
-import { getWeapon } from '../shared/weapons.js';
+import { getWeapon, CLASSES, DEFAULT_CLASS } from '../shared/weapons.js';
 import { pushOutOfSolids, playerOverlapsAny } from '../shared/collision.js';
 import * as modes from './modes.js';
 import { validateMove, validateHit, validateFireRate, capPelletCount, heightOf } from './validate.js';
@@ -26,6 +26,7 @@ const DURATION = {
   round: Number(process.env.ARENA_ROUND_MS) || ROUND_MS,
   countdown: Number(process.env.ARENA_COUNTDOWN_MS) || COUNTDOWN_MS,
   scoreboard: Number(process.env.ARENA_SCOREBOARD_MS) || SCOREBOARD_MS,
+  lobbyGrace: Number(process.env.ARENA_LOBBY_GRACE_MS) || LOBBY_GRACE_MS,
 };
 
 export class Room {
@@ -44,6 +45,11 @@ export class Room {
     this.emptySince = Date.now();
     this.lastResult = null;
 
+    // Lobby: whoever got here first picks the mode and the map and can force the
+    // start; everyone readies up individually.
+    this.hostId = null;
+    this.graceEndsAt = 0;
+
     this.timer = setInterval(() => this.tick(), TICK_MS);
     // Don't hold the process open on an idle room.
     this.timer.unref?.();
@@ -59,12 +65,14 @@ export class Room {
     return this.players.size >= modes.ROOM_CAPACITY;
   }
 
-  addPlayer({ id, name, ws }) {
+  addPlayer({ id, name, ws, classId }) {
     const player = {
       id,
       name,
       ws,
       team: null,
+      ready: false,
+      classId: CLASSES[classId] ? classId : DEFAULT_CLASS,
       pos: [0, 0, 0],
       yaw: 0,
       pitch: 0,
@@ -92,6 +100,7 @@ export class Room {
     player.team = modes.assignTeam(this, player);
     modes.rebalance(this);
     this.emptySince = 0;
+    this.ensureHost();
 
     player.inventory = modes.loadoutFor(this, player);
     player.weapon = player.inventory[0];
@@ -100,19 +109,20 @@ export class Room {
       code: this.code,
       mode: this.mode,
       mapId: this.mapId,
-      you: { id, team: player.team },
+      you: { id, team: player.team, classId: player.classId },
       phase: this.phase,
       phaseMsLeft: Math.max(0, this.phaseEndsAt - Date.now()),
       roster: this.roster(),
       teamScores: this.teamScores,
       inventory: player.inventory,
+      lobby: this.lobbyState(),
     });
 
     this.broadcastRoster();
 
     // A match already in progress: drop them straight in.
     if (this.phase === PHASE.LIVE) this.spawn(player);
-    else this.maybeStart();
+    else this.evaluateLobby();
 
     return player;
   }
@@ -125,14 +135,18 @@ export class Room {
     if (this.players.size === 0) {
       this.emptySince = Date.now();
       this.phase = PHASE.LOBBY;
+      this.hostId = null;
+      this.graceEndsAt = 0;
     } else {
       modes.rebalance(this);
+      this.ensureHost();
       this.broadcastRoster();
       // Everyone else left mid-match — back to the lobby rather than a 1-player
       // "match" running its clock down.
       if (this.phase !== PHASE.LOBBY && this.players.size < MIN_PLAYERS_TO_START) {
         this.setPhase(PHASE.LOBBY, 0);
       }
+      if (this.phase === PHASE.LOBBY) this.evaluateLobby();
     }
   }
 
@@ -149,11 +163,48 @@ export class Room {
       id: p.id,
       name: p.name,
       team: p.team,
+      ready: p.ready,
+      classId: p.classId,
       score: p.score,
       kills: p.kills,
       deaths: p.deaths,
       ladderIndex: p.ladderIndex,
     }));
+  }
+
+  /**
+   * The host is whoever has been here longest. Nobody chose them and nobody can
+   * take it from them — a vote or a transfer UI is more machinery than a room of
+   * coworkers needs, and "longest-standing" is the same answer everyone in the
+   * room would give anyway.
+   */
+  ensureHost() {
+    if (this.hostId && this.players.has(this.hostId)) return;
+
+    let next = null;
+    for (const p of this.players.values()) {
+      if (!next || p.joinedAt < next.joinedAt) next = p;
+    }
+    this.hostId = next?.id ?? null;
+  }
+
+  isHost(player) {
+    return !!player && player.id === this.hostId;
+  }
+
+  /** Everything the lobby screen renders. Includes the roster so a client only
+   *  ever needs one message to redraw the whole panel. */
+  lobbyState() {
+    return {
+      code: this.code,
+      mode: this.mode,
+      mapId: this.mapId,
+      hostId: this.hostId,
+      capacity: modes.ROOM_CAPACITY,
+      minPlayers: MIN_PLAYERS_TO_START,
+      startsInMs: this.graceEndsAt > 0 ? Math.max(0, this.graceEndsAt - Date.now()) : 0,
+      roster: this.roster(),
+    };
   }
 
   // ------------------------------------------------------------------ messaging
@@ -181,6 +232,10 @@ export class Room {
     this.broadcast(S2C.ROSTER, { roster: this.roster(), teamScores: this.teamScores });
   }
 
+  broadcastLobby() {
+    this.broadcast(S2C.LOBBY, this.lobbyState());
+  }
+
   // -------------------------------------------------------------------- phases
 
   setPhase(phase, durationMs) {
@@ -198,19 +253,115 @@ export class Room {
     });
   }
 
-  maybeStart() {
+  // ------------------------------------------------------------------- lobby
+  //
+  // Two rules decide when a lobby starts, and the second one exists only to stop
+  // the first from deadlocking:
+  //
+  //   1. Everybody present has readied up — go immediately.
+  //   2. At least MIN_PLAYERS have readied but somebody hasn't — run a grace
+  //      clock, then start without them.
+  //
+  // The grace clock needs a quorum of *ready* players to run at all, so a match
+  // can never start unless the minimum number of people actively asked for it.
+  // The host can also force the start, which is what actually gets used when
+  // eight people are stood around waiting for one straggler.
+
+  evaluateLobby() {
     if (this.phase !== PHASE.LOBBY) return;
-    if (this.players.size < MIN_PLAYERS_TO_START) return;
+
+    const players = [...this.players.values()];
+    const readyCount = players.filter((p) => p.ready).length;
+
+    if (players.length < MIN_PLAYERS_TO_START) {
+      this.graceEndsAt = 0;
+      this.broadcastLobby();
+      return;
+    }
+
+    if (readyCount === players.length) {
+      this.startCountdown();
+      return;
+    }
+
+    if (readyCount >= MIN_PLAYERS_TO_START) {
+      if (this.graceEndsAt === 0) this.graceEndsAt = Date.now() + DURATION.lobbyGrace;
+    } else {
+      // Dropped back below quorum — somebody un-readied, or left.
+      this.graceEndsAt = 0;
+    }
+
+    this.broadcastLobby();
+  }
+
+  startCountdown() {
+    this.graceEndsAt = 0;
     this.lastResult = null;
     this.setPhase(PHASE.COUNTDOWN, DURATION.countdown);
   }
 
+  handleReady(player, msg) {
+    if (this.phase !== PHASE.LOBBY) return;
+    const ready = msg?.ready !== false;
+    if (player.ready === ready) return;
+    player.ready = ready;
+    this.evaluateLobby();
+  }
+
+  handleStart(player) {
+    if (this.phase !== PHASE.LOBBY) return;
+    if (!this.isHost(player)) return;
+    if (this.players.size < MIN_PLAYERS_TO_START) return;
+    this.startCountdown();
+  }
+
+  /** Host picks the mode and the map from the lobby. */
+  handleLobbySet(player, msg) {
+    if (this.phase !== PHASE.LOBBY) return;
+    if (!this.isHost(player)) return;
+
+    let changed = false;
+
+    if (typeof msg?.mode === 'string' && msg.mode !== this.mode && MODES.includes(msg.mode)) {
+      this.mode = msg.mode;
+      this.teamScores = { A: 0, B: 0 };
+
+      // Team assignment has to be redone from scratch. Reusing it would leave
+      // everyone holding a team from a mode that no longer has any, and switching
+      // *into* a team mode would pile the whole room onto A.
+      for (const p of this.players.values()) p.team = null;
+      for (const p of this.players.values()) p.team = modes.assignTeam(this, p);
+      modes.rebalance(this);
+
+      // Gun Game hands out one weapon and the others hand out three, so the
+      // loadout everyone was told about at join time is now wrong.
+      for (const p of this.players.values()) {
+        p.ladderIndex = 0;
+        p.inventory = modes.loadoutFor(this, p);
+        p.weapon = p.inventory[0];
+        this.sendTo(p, S2C.LOADOUT, { inventory: p.inventory, weapon: p.weapon });
+      }
+      changed = true;
+    }
+
+    if (typeof msg?.mapId === 'string' && msg.mapId !== this.mapId && ROTATION.includes(msg.mapId)) {
+      this.mapId = msg.mapId;
+      this.map = getMap(this.mapId);
+      changed = true;
+    }
+
+    if (changed) this.broadcastLobby();
+  }
+
   beginRound() {
     modes.resetScores(this);
+    this.graceEndsAt = 0;
     for (const p of this.players.values()) {
-      p.inventory = modes.loadoutFor(this, p);
-      p.weapon = p.inventory[0];
-      this.spawn(p);
+      // Readiness is per-match. If the room drops back to the lobby later,
+      // everyone opts in again rather than inheriting a yes from an hour ago.
+      p.ready = false;
+      this.spawn(p); // resolves the loadout from their class
+
     }
     this.broadcastRoster();
     this.setPhase(PHASE.LIVE, DURATION.round);
@@ -273,6 +424,13 @@ export class Room {
   }
 
   spawn(player) {
+    // The loadout is resolved here, which is what makes "applies on your next
+    // spawn" true. A class chosen while alive only changes classId; this is the
+    // single place that turns a class into weapons, for the lobby, a respawn and
+    // a gun-game promotion alike.
+    player.inventory = modes.loadoutFor(this, player);
+    player.weapon = player.inventory[0];
+
     const point = this.chooseSpawn(player);
     player.pos = [point[0], point[1], point[2]];
     player.health = MAX_HEALTH;
@@ -339,6 +497,31 @@ export class Room {
   handleSwitch(player, msg) {
     if (!player.inventory.includes(msg.w)) return;
     player.weapon = msg.w;
+  }
+
+  /**
+   * Pick a class. Takes effect at once if you aren't currently alive — in the
+   * lobby, or on the death screen, which are the two moments anyone actually
+   * chooses — and otherwise waits for your next spawn. Letting a live player
+   * re-arm on demand would make every class the best class.
+   */
+  handleSetClass(player, msg) {
+    const id = String(msg?.classId ?? '');
+    if (!CLASSES[id] || player.classId === id) return;
+    player.classId = id;
+
+    if (modes.usesClasses(this.mode) && !player.alive) {
+      player.inventory = modes.loadoutFor(this, player);
+      player.weapon = player.inventory[0];
+      this.sendTo(player, S2C.LOADOUT, {
+        inventory: player.inventory,
+        weapon: player.weapon,
+        classId: player.classId,
+      });
+    }
+
+    if (this.phase === PHASE.LOBBY) this.broadcastLobby();
+    else this.broadcastRoster();
   }
 
   handleShoot(player, msg) {
@@ -457,6 +640,12 @@ export class Room {
     this.tickCount++;
 
     switch (this.phase) {
+      case PHASE.LOBBY:
+        // The grace clock ran out with somebody still unready. Start anyway;
+        // they get dropped in alive like anyone joining mid-match.
+        if (this.graceEndsAt > 0 && now >= this.graceEndsAt) this.startCountdown();
+        break;
+
       case PHASE.COUNTDOWN:
         if (now >= this.phaseEndsAt) this.beginRound();
         break;
@@ -473,7 +662,9 @@ export class Room {
             this.lastResult = null;
             this.setPhase(PHASE.COUNTDOWN, DURATION.countdown);
           } else {
+            // Not enough people for another round: back to the lobby to wait.
             this.setPhase(PHASE.LOBBY, 0);
+            this.broadcastLobby();
           }
         }
         break;

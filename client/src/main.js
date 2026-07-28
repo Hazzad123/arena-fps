@@ -5,9 +5,9 @@
 // across a long session.
 
 import * as THREE from 'three';
-import { PHYSICS_DT, MIN_FOV, MAX_FOV, TEAMS, RESPAWN_DELAY_MS } from '@shared/constants.js';
-import { getMap } from '@shared/maps/index.js';
-import { ALL_WEAPON_IDS, getWeapon } from '@shared/weapons.js';
+import { PHYSICS_DT, MIN_FOV, MAX_FOV, TEAMS, RESPAWN_DELAY_MS, MAX_PLAYERS } from '@shared/constants.js';
+import { getMap, mapList } from '@shared/maps/index.js';
+import { ALL_WEAPON_IDS, getWeapon, CLASSES, CLASS_IDS, DEFAULT_CLASS } from '@shared/weapons.js';
 import { raycastBoxes, raycastPlayers } from '@shared/collision.js';
 import { C2S, S2C, PHASE, FLAG, MODE_NAMES } from '@shared/protocol.js';
 
@@ -67,23 +67,53 @@ const app = {
     teamScores: { A: 0, B: 0 },
     roster: new Map(),
     resultText: null,
+
+    // Lobby, also mirrored. startsAt is on the local clock; 0 means no clock is
+    // running (not enough people have readied up yet).
+    lobby: {
+      hostId: null,
+      capacity: MAX_PLAYERS,
+      minPlayers: 2,
+      startsAt: 0,
+    },
   },
   pendingReports: { fallDamage: 0, void: false },
   deathAt: 0,
   killedBy: '',
   lastCountdownBeep: -1,
   wasReloading: false,
+  lobbyNotice: '',
+  lobbyNoticeTimer: null,
+  lockCheckTimer: null,
+  // Our own class. The server holds the authoritative copy; this is what the
+  // pickers highlight, and it survives across sessions via settings.
+  myClass: CLASSES[settings.classId] ? settings.classId : DEFAULT_CLASS,
 };
 
 // ----------------------------------------------------------------- dom handles
 
 const dom = {};
 for (const id of [
-  'menu', 'lobby', 'resume', 'nickname', 'menu-error', 'menu-footer',
+  'menu', 'lobby', 'nickname', 'menu-error', 'menu-footer',
   'btn-practice', 'btn-quickplay', 'btn-join', 'btn-create', 'room-code', 'mode-select',
   'sens', 'sens-val', 'fov', 'fov-val', 'vol', 'vol-val', 'invert-y',
-  'lobby-code', 'lobby-mode', 'lobby-players', 'lobby-status', 'btn-copy-link', 'btn-leave',
+  'lobby-code', 'lobby-mode', 'lobby-count', 'lobby-slots', 'lobby-status',
+  'lobby-host', 'lobby-mode-select', 'lobby-map-select', 'lobby-class', 'lobby-class-picker',
+  'btn-copy-link', 'btn-leave', 'btn-ready', 'btn-start',
+  'pause', 'pause-note', 'pause-class', 'pause-class-picker', 'pause-guns',
+  'pause-gun-picker', 'pause-settings', 'btn-resume', 'btn-quit',
+  'p-sens', 'p-sens-val', 'p-fov', 'p-fov-val', 'p-vol', 'p-vol-val', 'p-invert-y',
+  'respawn-class', 'respawn-class-picker',
 ]) dom[id] = document.getElementById(id);
+
+// The host's map picker offers exactly the rotation — the practice range isn't a
+// multiplayer map.
+for (const m of mapList()) {
+  const option = document.createElement('option');
+  option.value = m.id;
+  option.textContent = m.name;
+  dom['lobby-map-select'].appendChild(option);
+}
 
 // ------------------------------------------------------------------- settings
 
@@ -93,38 +123,54 @@ dom.nickname.addEventListener('input', () => {
   saveSettings();
 });
 
-dom.sens.value = settings.sensitivity;
-dom.fov.value = settings.fov;
-dom.vol.value = Math.round(settings.volume * 100);
-dom['invert-y'].checked = settings.invertY;
+// The same four controls appear in the menu and in the pause menu. They're bound
+// generically rather than twice over, so the two can't disagree — and every set
+// is re-synced on any change, because changing the FOV mid-match should be
+// reflected next time you open the main menu.
+const SETTING_PANELS = [
+  { sens: 'sens', fov: 'fov', vol: 'vol', invert: 'invert-y' },
+  { sens: 'p-sens', fov: 'p-fov', vol: 'p-vol', invert: 'p-invert-y' },
+];
 
-function syncSettingLabels() {
-  dom['sens-val'].textContent = Number(settings.sensitivity).toFixed(2);
-  dom['fov-val'].textContent = settings.fov;
-  dom['vol-val'].textContent = Math.round(settings.volume * 100);
+function syncSettingInputs() {
+  for (const p of SETTING_PANELS) {
+    dom[p.sens].value = settings.sensitivity;
+    dom[p.fov].value = settings.fov;
+    dom[p.vol].value = Math.round(settings.volume * 100);
+    dom[p.invert].checked = settings.invertY;
+    dom[`${p.sens}-val`].textContent = Number(settings.sensitivity).toFixed(2);
+    dom[`${p.fov}-val`].textContent = settings.fov;
+    dom[`${p.vol}-val`].textContent = Math.round(settings.volume * 100);
+  }
 }
-syncSettingLabels();
 
-dom.sens.addEventListener('input', () => {
-  settings.sensitivity = Number(dom.sens.value);
-  syncSettingLabels();
+function commit(change) {
+  change();
+  syncSettingInputs();
   saveSettings();
-});
-dom.fov.addEventListener('input', () => {
-  settings.fov = Math.max(MIN_FOV, Math.min(MAX_FOV, Number(dom.fov.value)));
-  syncSettingLabels();
-  saveSettings();
-});
-dom.vol.addEventListener('input', () => {
-  settings.volume = Number(dom.vol.value) / 100;
-  audio.setVolume(settings.volume);
-  syncSettingLabels();
-  saveSettings();
-});
-dom['invert-y'].addEventListener('change', () => {
-  settings.invertY = dom['invert-y'].checked;
-  saveSettings();
-});
+}
+
+for (const p of SETTING_PANELS) {
+  dom[p.sens].addEventListener('input', () =>
+    commit(() => {
+      settings.sensitivity = Number(dom[p.sens].value);
+    }));
+  dom[p.fov].addEventListener('input', () =>
+    commit(() => {
+      settings.fov = Math.max(MIN_FOV, Math.min(MAX_FOV, Number(dom[p.fov].value)));
+    }));
+  dom[p.vol].addEventListener('input', () =>
+    commit(() => {
+      settings.volume = Number(dom[p.vol].value) / 100;
+      audio.setVolume(settings.volume);
+    }));
+  dom[p.invert].addEventListener('change', () =>
+    commit(() => {
+      settings.invertY = dom[p.invert].checked;
+    }));
+}
+
+syncSettingInputs();
 
 dom['room-code'].addEventListener('input', () => {
   dom['room-code'].value = dom['room-code'].value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
@@ -177,7 +223,10 @@ async function enterMultiplayer(action, payload) {
 
   try {
     if (!connection.connected) await net.connect(connection, { name });
-    net.send(connection, action, payload);
+    // The class travels with the join. Joining a match already in progress spawns
+    // you immediately, so telling the server afterwards would always cost you
+    // your first life on the wrong class.
+    net.send(connection, action, { ...payload, classId: app.myClass });
   } catch (err) {
     showError(`Couldn’t reach the server. ${err.message}`);
   } finally {
@@ -195,8 +244,9 @@ dom['btn-copy-link'].addEventListener('click', async () => {
     setTimeout(() => (dom['btn-copy-link'].textContent = 'Copy invite link'), 1500);
   } catch {
     // Clipboard needs permission in some contexts; show the link so it can be
-    // copied by hand rather than silently doing nothing.
-    dom['lobby-status'].textContent = url;
+    // copied by hand rather than silently doing nothing. It goes through the
+    // notice slot because the status line is rewritten every frame.
+    showLobbyNotice(url, 8000);
   }
 });
 
@@ -227,7 +277,7 @@ function startPractice() {
   hud.setStateBanner('');
   hud.updatePracticeStats(app.range.stats);
   hud.highlightWeapon(player.inventory[player.slotIndex]);
-  requestLock();
+  grabPointer();
 }
 
 function enterLobby() {
@@ -236,6 +286,9 @@ function enterLobby() {
   dom.menu.classList.add('hidden');
   dom.lobby.classList.remove('hidden');
   hud.showHud(false);
+  hud.showRespawn(false);
+  // A round can end while the pause menu is open; the lobby has its own buttons.
+  showPause(false);
   renderLobby();
 }
 
@@ -246,7 +299,7 @@ function enterMatch() {
   hud.showHud(true);
   hud.setPracticeMode(false);
   hud.setTeamScoresVisible(app.match.mode === 'tdm');
-  requestLock();
+  grabPointer();
 }
 
 function leaveToMenu() {
@@ -263,45 +316,347 @@ function leaveToMenu() {
   app.screen = 'menu';
   app.match.code = null;
   app.match.roster.clear();
+  app.match.lobby.hostId = null;
+  app.match.lobby.startsAt = 0;
+  app.lobbyNotice = '';
+  clearTimeout(app.lobbyNoticeTimer);
 
   history.replaceState(null, '', location.pathname);
   hud.showHud(false);
   hud.showScoreboard(false);
+  hud.showRespawn(false);
   hud.clearKillfeed();
-  dom.resume.classList.add('hidden');
+  showPause(false);
   dom.lobby.classList.add('hidden');
   dom.menu.classList.remove('hidden');
 }
 
-function renderLobby() {
-  const m = app.match;
-  dom['lobby-code'].textContent = m.code ?? '----';
-  dom['lobby-mode'].textContent = `${MODE_NAMES[m.mode] ?? m.mode} · ${app.map?.name ?? ''}`;
+// ---------------------------------------------------------------- pickers
+//
+// One builder for the class picker, used in three places: the lobby, the pause
+// menu and the death screen. Every entry shows its number key, because on the
+// death screen the pointer is still locked to the canvas and the keyboard is the
+// only way to choose.
 
-  dom['lobby-players'].replaceChildren();
-  for (const p of m.roster.values()) {
-    const row = document.createElement('div');
-    row.className = 'lobby-player';
-    const dot = document.createElement('span');
-    dot.className = 'dot';
-    dot.style.background =
-      m.mode === 'tdm' ? (p.team === TEAMS.A ? 'var(--team-a)' : 'var(--team-b)') : 'var(--accent)';
+const CLASS_PICKERS = ['lobby-class-picker', 'pause-class-picker', 'respawn-class-picker'];
+
+function buildPicker(container, entries, onPick) {
+  container.replaceChildren();
+  for (const entry of entries) {
+    const button = document.createElement('button');
+    button.className = 'pick';
+    button.type = 'button';
+    button.dataset.pick = entry.id;
+
+    const key = document.createElement('span');
+    key.className = 'key';
+    key.textContent = entry.key;
+
+    const body = document.createElement('span');
+    body.className = 'body';
     const name = document.createElement('span');
-    name.textContent = p.name;
+    name.className = 'nm';
+    name.textContent = entry.name;
+    const sub = document.createElement('span');
+    sub.className = 'sub';
+    sub.textContent = entry.sub;
+    body.append(name, sub);
+
+    button.append(key, body);
+    button.addEventListener('click', () => onPick(entry.id));
+    container.appendChild(button);
+  }
+}
+
+function highlightPicker(container, activeId) {
+  for (const button of container.children) {
+    button.classList.toggle('active', button.dataset.pick === activeId);
+  }
+}
+
+function classEntries() {
+  return CLASS_IDS.map((id, i) => ({
+    id,
+    key: i + 1,
+    name: CLASSES[id].name,
+    sub: getWeapon(CLASSES[id].primary).name,
+  }));
+}
+
+function buildClassPickers() {
+  for (const id of CLASS_PICKERS) buildPicker(dom[id], classEntries(), chooseClass);
+}
+
+function refreshClassPickers() {
+  for (const id of CLASS_PICKERS) highlightPicker(dom[id], app.myClass);
+}
+
+/** Ask the server for a class. It decides when that takes effect. */
+function chooseClass(classId) {
+  if (!CLASSES[classId]) return;
+  app.myClass = classId;
+  settings.classId = classId;
+  saveSettings();
+  refreshClassPickers();
+  audio.playClick();
+  if (connection.connected) net.send(connection, C2S.SETCLASS, { classId });
+}
+
+/** The practice range's mouse-driven gun list. The number keys still work; this
+ *  exists because nothing on screen told anyone that. */
+function buildGunPicker() {
+  const entries = ALL_WEAPON_IDS.map((id) => ({
+    id,
+    key: getWeapon(id).slot,
+    name: getWeapon(id).name,
+    sub: `${getWeapon(id).mag === Infinity ? '∞' : getWeapon(id).mag} rounds`,
+  }));
+  buildPicker(dom['pause-gun-picker'], entries, (id) => {
+    const index = player.inventory.indexOf(id);
+    if (index < 0) return;
+    player.slotIndex = index;
+    setViewWeapon(weaponView, id);
+    hud.highlightWeapon(id);
+    highlightPicker(dom['pause-gun-picker'], id);
+    audio.playClick();
+  });
+}
+
+buildClassPickers();
+buildGunPicker();
+
+// ------------------------------------------------------------------- pause
+
+function pauseVisible() {
+  return !dom.pause.classList.contains('hidden');
+}
+
+function showPause(visible) {
+  dom.pause.classList.toggle('hidden', !visible);
+  if (!visible) return;
+
+  const inMatch = app.screen === 'match';
+  dom['pause-note'].textContent = inMatch
+    ? 'The match is still running — you are not invisible.'
+    : 'Practice range';
+  // Class is a multiplayer concept, and Gun Game hands out its own ladder.
+  dom['pause-class'].classList.toggle('hidden', !inMatch || app.match.mode === 'gungame');
+  dom['pause-guns'].classList.toggle('hidden', app.screen !== 'practice');
+
+  if (app.screen === 'practice') {
+    highlightPicker(dom['pause-gun-picker'], player.inventory[player.slotIndex]);
+  }
+  refreshClassPickers();
+}
+
+// Deliberately doesn't hide the panel itself — onLockChange does that once the
+// lock actually lands. Chrome refuses a re-lock for about a second after Escape
+// released it, and hiding optimistically would drop you into the game with no
+// cursor, no crosshair control and nothing to click.
+dom['btn-resume'].addEventListener('click', () => requestLock());
+
+dom['btn-quit'].addEventListener('click', () => leaveToMenu());
+
+/**
+ * Take the pointer when entering the game, and if the browser refuses, fall back
+ * to the pause menu so there's always a visible way in. The delay is there
+ * because the lock arrives as an event a frame or two later, and showing the
+ * panel in the meantime would flash it on every single spawn.
+ */
+function grabPointer() {
+  requestLock();
+  clearTimeout(app.lockCheckTimer);
+  app.lockCheckTimer = setTimeout(() => {
+    const inGame = app.screen === 'practice' || app.screen === 'match';
+    if (inGame && !input.locked) showPause(true);
+  }, 600);
+}
+
+// ------------------------------------------------------------------- lobby
+
+function me() {
+  return app.match.roster.get(connection.myId) ?? null;
+}
+
+function iAmHost() {
+  return app.match.lobby.hostId === connection.myId;
+}
+
+/** One slot. `player` is null for an empty seat. */
+function lobbySlot(player, teamColor) {
+  const row = document.createElement('div');
+  row.className = 'slot';
+
+  const dot = document.createElement('span');
+  dot.className = 'dot';
+
+  const name = document.createElement('span');
+  name.className = 'nm';
+
+  if (!player) {
+    row.classList.add('empty');
+    name.textContent = 'Open';
     row.append(dot, name);
-    if (p.id === connection.myId) {
-      const you = document.createElement('span');
-      you.className = 'you';
-      you.textContent = 'you';
-      row.appendChild(you);
-    }
-    dom['lobby-players'].appendChild(row);
+    return row;
   }
 
-  const count = m.roster.size;
-  dom['lobby-status'].textContent =
-    count < 2 ? 'Waiting for one more player…' : `${count} players ready — starting shortly`;
+  dot.style.background = teamColor;
+  name.textContent = player.name;
+  row.append(dot, name);
+
+  if (player.id === app.match.lobby.hostId) {
+    const crown = document.createElement('span');
+    crown.className = 'crown';
+    crown.textContent = '★';
+    crown.title = 'Host';
+    row.appendChild(crown);
+  }
+  if (player.id === connection.myId) row.classList.add('me');
+
+  const tag = document.createElement('span');
+  if (player.ready) {
+    row.classList.add('is-ready');
+    tag.className = 'tag ready';
+    tag.textContent = 'ready';
+  } else {
+    tag.className = 'tag';
+    tag.textContent = player.id === connection.myId ? 'you' : 'waiting';
+  }
+  row.appendChild(tag);
+
+  return row;
 }
+
+function renderLobby() {
+  const m = app.match;
+  const capacity = m.lobby.capacity || MAX_PLAYERS;
+  const players = [...m.roster.values()];
+
+  dom['lobby-code'].textContent = m.code ?? '----';
+  dom['lobby-mode'].textContent = `${MODE_NAMES[m.mode] ?? m.mode} · ${app.map?.name ?? ''}`;
+  dom['lobby-count'].textContent = `${players.length} / ${capacity}`;
+
+  dom['lobby-slots'].replaceChildren();
+
+  if (m.mode === 'tdm') {
+    // Split by team so the lobby shows the balance you'll actually play with.
+    const half = Math.ceil(capacity / 2);
+    for (const team of [TEAMS.A, TEAMS.B]) {
+      const col = document.createElement('div');
+      col.className = 'slot-col';
+      const head = document.createElement('div');
+      head.className = `slot-head ${team.toLowerCase()}`;
+      head.textContent = `Team ${team}`;
+      col.appendChild(head);
+
+      // Rebalancing keeps the teams within one of each other, so half the room
+      // per column is right — but never render fewer slots than there are
+      // people, or a player would silently vanish from the lobby.
+      const members = players.filter((p) => p.team === team);
+      for (let i = 0; i < Math.max(half, members.length); i++) {
+        col.appendChild(lobbySlot(members[i] ?? null, `var(--team-${team.toLowerCase()})`));
+      }
+      dom['lobby-slots'].appendChild(col);
+    }
+  } else {
+    for (let i = 0; i < capacity; i++) {
+      dom['lobby-slots'].appendChild(lobbySlot(players[i] ?? null, 'var(--accent)'));
+    }
+  }
+
+  // Host controls. Everyone else just sees the mode and map in the header.
+  dom['lobby-host'].classList.toggle('hidden', !iAmHost());
+  dom['lobby-mode-select'].value = m.mode;
+  dom['lobby-map-select'].value = app.map?.id ?? '';
+
+  dom['btn-start'].classList.toggle('hidden', !iAmHost());
+  dom['btn-start'].disabled = players.length < (m.lobby.minPlayers || 2);
+
+  // Gun Game marches everyone up the same ladder, so a class would be a lie.
+  dom['lobby-class'].classList.toggle('hidden', m.mode === 'gungame');
+  refreshClassPickers();
+
+  const mine = me();
+  const ready = !!mine?.ready;
+  dom['btn-ready'].textContent = ready ? 'Ready ✓' : 'Ready up';
+  dom['btn-ready'].classList.toggle('is-ready', ready);
+  dom['btn-ready'].title = ready ? 'Click to un-ready' : '';
+
+  updateLobbyStatus();
+}
+
+/** m:ss. The grace period is well under a minute today, but the constant is
+ *  meant to be tuned and "0:90" would be a silly thing to ship. */
+function clock(totalSeconds) {
+  const mins = Math.floor(totalSeconds / 60);
+  return `${mins}:${String(totalSeconds % 60).padStart(2, '0')}`;
+}
+
+/** Temporarily takes over the status line. */
+function showLobbyNotice(text, ms) {
+  app.lobbyNotice = text;
+  clearTimeout(app.lobbyNoticeTimer);
+  app.lobbyNoticeTimer = setTimeout(() => {
+    app.lobbyNotice = '';
+  }, ms);
+}
+
+/** Status line only. Called every frame so the grace countdown ticks without
+ *  rebuilding the slot grid. */
+function updateLobbyStatus() {
+  const m = app.match;
+  const players = [...m.roster.values()];
+  const readyCount = players.filter((p) => p.ready).length;
+  const min = m.lobby.minPlayers || 2;
+  const status = dom['lobby-status'];
+
+  if (app.lobbyNotice) {
+    status.textContent = app.lobbyNotice;
+    return;
+  }
+
+  if (players.length < min) {
+    const need = min - players.length;
+    status.textContent = `Waiting for ${need} more player${need === 1 ? '' : 's'} — share the code above.`;
+    return;
+  }
+
+  if (m.lobby.startsAt > 0) {
+    const left = Math.max(0, m.lobby.startsAt - performance.now());
+    const secs = Math.ceil(left / 1000);
+    const waiting = players.length - readyCount;
+    status.replaceChildren(
+      document.createTextNode('Starting in '),
+      Object.assign(document.createElement('b'), { textContent: clock(secs) }),
+      document.createTextNode(
+        ` — waiting on ${waiting} player${waiting === 1 ? '' : 's'} to ready up.`,
+      ),
+    );
+    return;
+  }
+
+  status.textContent =
+    readyCount === 0
+      ? `${players.length} here. Ready up when you are — ${min} ready starts the clock.`
+      : `${readyCount} of ${players.length} ready — ${min} ready starts the clock.`;
+}
+
+dom['btn-ready'].addEventListener('click', () => {
+  net.send(connection, C2S.READY, { ready: !me()?.ready });
+  audio.playClick();
+});
+
+dom['btn-start'].addEventListener('click', () => {
+  net.send(connection, C2S.START, {});
+});
+
+dom['lobby-mode-select'].addEventListener('change', () => {
+  net.send(connection, C2S.LOBBY_SET, { mode: dom['lobby-mode-select'].value });
+});
+
+dom['lobby-map-select'].addEventListener('change', () => {
+  net.send(connection, C2S.LOBBY_SET, { mapId: dom['lobby-map-select'].value });
+});
 
 // ------------------------------------------------------------- network events
 
@@ -327,6 +682,8 @@ net.on(connection, S2C.JOINED, (msg) => {
   updateRoster(msg.roster);
 
   applyMap(msg.mapId);
+  // After applyMap, so the map ids already agree and it doesn't rebuild.
+  if (msg.lobby) applyLobbyState(msg.lobby);
   setLoadout(player, msg.inventory ?? ['rifle', 'pistol', 'knife']);
   setViewWeapon(weaponView, player.inventory[0]);
 
@@ -342,6 +699,24 @@ net.on(connection, S2C.ROSTER, (msg) => {
   updateRoster(msg.roster);
   app.match.teamScores = msg.teamScores ?? app.match.teamScores;
   hud.updateScores(app.match.teamScores.A, app.match.teamScores.B);
+  if (app.screen === 'lobby') renderLobby();
+});
+
+/** Mirror a lobby update from the server. Also handles the host changing the
+ *  mode or map, which changes what we render behind the panel. */
+function applyLobbyState(msg) {
+  const m = app.match;
+  m.mode = msg.mode ?? m.mode;
+  m.lobby.hostId = msg.hostId ?? null;
+  m.lobby.capacity = msg.capacity ?? MAX_PLAYERS;
+  m.lobby.minPlayers = msg.minPlayers ?? 2;
+  m.lobby.startsAt = msg.startsInMs > 0 ? performance.now() + msg.startsInMs : 0;
+  if (msg.roster) updateRoster(msg.roster);
+  if (msg.mapId && msg.mapId !== app.map?.id) applyMap(msg.mapId);
+}
+
+net.on(connection, S2C.LOBBY, (msg) => {
+  applyLobbyState(msg);
   if (app.screen === 'lobby') renderLobby();
 });
 
@@ -402,6 +777,11 @@ net.on(connection, S2C.RESPAWN, (msg) => {
 net.on(connection, S2C.LOADOUT, (msg) => {
   setLoadout(player, msg.inventory);
   setViewWeapon(weaponView, player.inventory[0]);
+  // The server confirming a class change is the authoritative answer.
+  if (msg.classId && CLASSES[msg.classId]) {
+    app.myClass = msg.classId;
+    refreshClassPickers();
+  }
   if (msg.promoted) {
     hud.setStateBanner(`Promoted: ${getWeapon(msg.inventory[0]).name}`);
     setTimeout(() => hud.setStateBanner(''), 1600);
@@ -464,6 +844,13 @@ function updateRoster(list) {
   if (!list) return;
   app.match.roster.clear();
   for (const p of list) app.match.roster.set(p.id, p);
+
+  // Our own team can change under us — rebalancing moves the most recent joiner
+  // when someone leaves, and switching mode reassigns everyone. Track it here or
+  // we'd keep colouring by a team we're no longer on, which shows teammates as
+  // enemies.
+  const mine = app.match.roster.get(connection.myId);
+  if (mine) app.match.myTeam = mine.team ?? null;
 }
 
 function directionTo(worldPos) {
@@ -493,18 +880,45 @@ function showFullScoreboard() {
 
 // ------------------------------------------------------------- pointer lock UX
 
+// Losing the pointer is the pause: Escape releases it, and the browser also
+// releases it on tab switches and alerts. Either way you land here.
 onLockChange((locked) => {
   const inGame = app.screen === 'practice' || app.screen === 'match';
-  dom.resume.classList.toggle('hidden', locked || !inGame);
-  if (locked) audio.resumeAudio();
+  if (locked) {
+    showPause(false);
+    audio.resumeAudio();
+  } else if (inGame) {
+    showPause(true);
+  }
 });
 
-dom.resume.addEventListener('click', () => requestLock());
-
 window.addEventListener('keydown', (e) => {
-  if (e.code !== 'Escape') return;
-  const inGame = app.screen === 'practice' || app.screen === 'match';
-  if (inGame && !input.locked) leaveToMenu();
+  // Don't hijack keys while a select or a text field has focus.
+  const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName ?? '');
+
+  if (app.screen === 'lobby') {
+    if (e.code === 'Escape') leaveToMenu();
+    else if (e.code === 'Enter' && !typing) dom['btn-ready'].click();
+    return;
+  }
+
+  if (!pauseVisible()) return;
+
+  // Escape both opens and closes the pause menu. Chrome enforces a short cooldown
+  // before a pointer lock released by Escape can be reacquired, so the menu is
+  // dismissed by onLockChange when the lock actually lands — not optimistically
+  // here, which would leave you staring at the game with no controls.
+  if (e.code === 'Escape') {
+    requestLock();
+    return;
+  }
+
+  // Number keys pick a class from the pause menu too, matching the death screen.
+  const num = e.code.match(/^Digit([1-9])$/);
+  if (num && !typing && !dom['pause-class'].classList.contains('hidden')) {
+    const id = CLASS_IDS[Number(num[1]) - 1];
+    if (id) chooseClass(id);
+  }
 });
 
 // -------------------------------------------------------------------- firing
@@ -623,6 +1037,9 @@ function frame() {
  *  dev console and tests can drive it with an explicit dt. */
 function step(dt, now) {
   if (app.screen === 'menu' || app.screen === 'lobby' || !app.map) {
+    // The lobby's start clock is server-owned but ticked locally, same as the
+    // round timer — one message tells us the deadline, the panel counts down.
+    if (app.screen === 'lobby') updateLobbyStatus();
     renderer.render(world.scene, camera);
     return;
   }
@@ -633,6 +1050,16 @@ function step(dt, now) {
   player.yaw -= look.dx;
   player.pitch = Math.max(-Math.PI / 2 + 0.02, Math.min(Math.PI / 2 - 0.02, player.pitch - look.dy));
   app.lookDelta = look;
+
+  // While dead the number keys pick your next class rather than a weapon — you
+  // have no weapon to switch to, and the pointer is still locked so the mouse
+  // can't reach the picker on screen. Has to run before handleWeaponInput,
+  // which consumes the same keypress.
+  if (app.screen === 'match' && !player.alive && app.match.mode !== 'gungame' && input.weaponSlot > 0) {
+    const id = CLASS_IDS[input.weaponSlot - 1];
+    input.weaponSlot = 0;
+    if (id) chooseClass(id);
+  }
 
   const previousWeapon = player.inventory[player.slotIndex];
   const wasReloading = app.wasReloading;
@@ -745,6 +1172,9 @@ function updateMatchHud(now) {
   if (!player.alive && m.phase === PHASE.LIVE) {
     const elapsed = app.deathAt > 0 ? now - app.deathAt : 0;
     hud.showRespawn(true, app.killedBy, Math.max(0, RESPAWN_DELAY_MS - elapsed));
+    // Being dead is the other moment you'd want to change class, and the only
+    // one where it's free. Gun Game issues its own weapon, so not there.
+    dom['respawn-class'].classList.toggle('hidden', m.mode === 'gungame');
   }
 
   // Tab holds the scoreboard open mid-round.

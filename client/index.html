@@ -52,7 +52,7 @@
         <div class="pr-row"><span>Shots</span><b id="pr-shots">0</b></div>
         <div class="pr-row"><span>Accuracy</span><b id="pr-acc">—</b></div>
         <div class="pr-row"><span>Best streak</span><b id="pr-streak">0</b></div>
-        <div class="pr-hint">R reload · T reset targets · Esc menu</div>
+        <div class="pr-hint">1–8 change gun · R reload · T reset targets · Esc pause</div>
       </div>
 
       <!-- weapon rack: populated from the weapon table, so it can't fall out of
@@ -63,6 +63,12 @@
         <div class="big">DOWN</div>
         <div id="respawn-by"></div>
         <div id="respawn-timer"></div>
+        <!-- pointer lock is still held while dead, so this is driven by the
+             number keys rather than the mouse -->
+        <div id="respawn-class" class="hidden">
+          <div class="label">Change class — press a number</div>
+          <div class="class-picker" id="respawn-class-picker"></div>
+        </div>
       </div>
 
       <div id="scoreboard" class="hidden"></div>
@@ -135,15 +141,87 @@
           </div>
           <button id="btn-copy-link" class="ghost">Copy invite link</button>
         </div>
-        <div id="lobby-mode" class="label"></div>
-        <div id="lobby-players"></div>
+
+        <div class="lobby-meta">
+          <div id="lobby-mode" class="label"></div>
+          <div id="lobby-count" class="label">0 / 8</div>
+        </div>
+
+        <!-- eight slots, always all eight: an empty one is information -->
+        <div id="lobby-slots"></div>
+
+        <div id="lobby-host" class="hidden">
+          <div class="label">Host controls</div>
+          <div class="host-row">
+            <select id="lobby-mode-select">
+              <option value="tdm">Team Deathmatch</option>
+              <option value="ffa">Free-for-all</option>
+              <option value="gungame">Gun Game</option>
+            </select>
+            <select id="lobby-map-select"></select>
+          </div>
+        </div>
+
+        <div id="lobby-class">
+          <div class="label">Your class</div>
+          <div class="class-picker" id="lobby-class-picker"></div>
+        </div>
+
         <div id="lobby-status">Waiting for players…</div>
-        <button id="btn-leave" class="ghost">Leave</button>
+
+        <div class="lobby-actions">
+          <button id="btn-ready" class="primary">Ready up</button>
+          <button id="btn-start" class="hidden">Start now</button>
+        </div>
+        <button id="btn-leave" class="ghost wide">Leave room</button>
       </div>
     </div>
 
-    <!-- click-to-play catcher, shown when pointer lock is lost mid-match -->
-    <div id="resume" class="hidden"><div>Click to resume</div></div>
+    <!-- ================= pause ================= -->
+    <!-- Shown whenever pointer lock is lost during a match or the practice
+         range. Escape releases the pointer, so this is what Escape now does. -->
+    <div id="pause" class="hidden">
+      <div id="pause-inner">
+        <div class="pause-head">
+          <h2>PAUSED</h2>
+          <div id="pause-note" class="label"></div>
+        </div>
+
+        <button id="btn-resume" class="primary wide">Resume</button>
+
+        <div id="pause-class" class="pause-section hidden">
+          <div class="label">Class — applies on your next spawn</div>
+          <div class="class-picker" id="pause-class-picker"></div>
+        </div>
+
+        <div id="pause-guns" class="pause-section hidden">
+          <div class="label">Weapon</div>
+          <div class="gun-picker" id="pause-gun-picker"></div>
+        </div>
+
+        <details id="pause-settings" class="pause-section">
+          <summary>Settings</summary>
+          <label class="slider">
+            <span>Mouse sensitivity <b id="p-sens-val">1.00</b></span>
+            <input id="p-sens" type="range" min="0.2" max="3" step="0.05" />
+          </label>
+          <label class="slider">
+            <span>Field of view <b id="p-fov-val">80</b></span>
+            <input id="p-fov" type="range" min="60" max="110" step="1" />
+          </label>
+          <label class="slider">
+            <span>Volume <b id="p-vol-val">70</b></span>
+            <input id="p-vol" type="range" min="0" max="100" step="1" />
+          </label>
+          <label class="check">
+            <input id="p-invert-y" type="checkbox" />
+            <span>Invert vertical look</span>
+          </label>
+        </details>
+
+        <button id="btn-quit" class="ghost wide">Leave to menu</button>
+      </div>
+    </div>
 
     <script type="module" src="./src/main.js"></script>
   </body>

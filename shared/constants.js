@@ -56,6 +56,13 @@ export const MIN_PLAYERS_TO_START = 2;
 export const MAX_PLAYERS = 8;
 export const EMPTY_ROOM_TTL_MS = 60_000;
 
+// How long a lobby that already has enough players waits for the stragglers to
+// ready up before starting without them. A lobby that can only start on a
+// unanimous vote deadlocks the moment one person wanders off to get a coffee,
+// and the host — the one person who could force it — is as likely as anyone to
+// be that person.
+export const LOBBY_GRACE_MS = 45_000;
+
 export const SCORE_LIMIT = { tdm: 75, ffa: 30, gungame: null }; // null = no cap
 
 // ------------------------------------------------------------------- rooms

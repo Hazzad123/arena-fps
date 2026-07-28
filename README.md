@@ -39,16 +39,37 @@ To let people on your network join without deploying, give them
 | Switch weapon | `1`–`8` |
 | Scoreboard | hold `Tab` |
 | Reset practice targets | `T` |
-| Release mouse / back out | `Esc` (twice to leave) |
+| Pause menu | `Esc` (again to resume) |
+| Change class | `1`–`6` while dead or paused |
 
 **Modes.** Team Deathmatch (auto-balanced teams, friendly fire off),
 Free-for-all, and Gun Game (every kill promotes you up
 pistol → SMG → shotgun → rifle → sniper → knife; win with a knife kill).
 
+**Lobby.** Up to eight players gather in the room before a match, shown as eight
+slots — split by team in TDM — with everyone's ready state. It starts when
+everybody has readied up, and the host (whoever arrived first) can force it or
+change the mode and map. If someone wanders off, a 45-second clock starts once at
+least two people are ready and the match goes without them, so a lobby can't
+deadlock on one person. Nobody is dragged in against a unanimous vote they never
+gave: the clock only runs when a quorum has actually said yes.
+
+**Classes.** Six, each defined entirely by its primary — Assault (rifle), Scout
+(SMG), Breacher (shotgun), Marksman (DMR), Recon (sniper), Support (LMG). Everyone
+also carries the sidearm and knife. Pick one in the lobby, from the pause menu, or
+on the death screen; the choice is remembered between sessions. Changing class
+while you're alive takes effect on your next spawn rather than immediately, so it
+can't be used as a free mid-fight re-arm. Gun Game ignores classes by design.
+
+**Pause menu.** `Esc` releases the mouse and opens it: resume, settings, class,
+and leave. In the practice range it also lists every weapon to click. It does
+**not** pause the match — you're still standing there, and it says so.
+
 **Weapons.** Eight: knife, sidearm, SMG, shotgun, assault rifle, sniper, support
-LMG, and a marksman rifle. The practice range gives you all of them on keys
-`1`–`8` and shows a rack listing each one. Gun Game deliberately uses only the
-first six — eight rungs makes the mode outlast a three-minute round.
+LMG, and a marksman rifle. The practice range gives you all of them — keys `1`–`8`,
+a rack down the side listing each one, and a clickable list in the pause menu.
+Gun Game deliberately uses only the first six — eight rungs makes the mode outlast
+a three-minute round.
 
 Aiming down sights zooms and tightens spread; the sniper switches to a scope with
 its own reticle rather than showing the gun. Reloads are animated (magazine out,
@@ -95,7 +116,7 @@ but wants the `flyctl` CLI installed.
 npm test
 ```
 
-68 tests, no browser needed. They cover the parts where a bug is silent rather
+104 tests, no browser needed. They cover the parts where a bug is silent rather
 than loud:
 
 - **`shared/collision.js`** — swept AABB movement, ray/box and ray/cylinder
@@ -109,6 +130,10 @@ than loud:
   placed above the 1.28m jump height, a staircase that ran underneath the
   balcony it led to, and catwalk stairs that stopped at the underside of their
   own deck.
+- **Lobby and class rules** (`test/lobby.test.js`) — capacity, host promotion, the
+  start rules and every way they could deadlock, and that a class change while
+  alive waits for your next spawn. Ways a lobby fails to start are invisible until
+  eight people are stood around waiting, which is the worst time to find out.
 
 ### Filling a lobby without any people
 
@@ -127,11 +152,15 @@ node server/bot.js --count 7 --mode gungame --duration 60
 Useful flags: `--count`, `--mode tdm|ffa|gungame`, `--code ABCD` to join a
 specific room, `--duration <seconds>` to auto-report and exit, `--quiet`.
 
+Bots ready up on arrival (so the lobby actually starts) and spread themselves
+across the six classes, so a bot match exercises every weapon rather than eight
+assault rifles.
+
 To watch whole round cycles without waiting three minutes each, compress the
 phase timers (server-side only):
 
 ```bash
-ARENA_ROUND_MS=20000 ARENA_COUNTDOWN_MS=2000 ARENA_SCOREBOARD_MS=3000 npm run dev:server
+ARENA_ROUND_MS=20000 ARENA_COUNTDOWN_MS=2000 ARENA_SCOREBOARD_MS=3000 ARENA_LOBBY_GRACE_MS=5000 npm run dev:server
 ```
 
 ## How it's built

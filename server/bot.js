@@ -20,7 +20,7 @@ import {
 import { C2S, S2C, PHASE, FLAG, encode, decode, decodeSnapshot } from '../shared/protocol.js';
 import { getMap } from '../shared/maps/index.js';
 import { moveAndCollide, hasLineOfSight } from '../shared/collision.js';
-import { getWeapon, fireIntervalMs } from '../shared/weapons.js';
+import { getWeapon, fireIntervalMs, CLASS_IDS } from '../shared/weapons.js';
 
 // ------------------------------------------------------------------------ args
 
@@ -107,8 +107,11 @@ class Bot {
       this.ws.on('open', () => {
         stats.connected++;
         this.send(C2S.HELLO, { name: this.name });
-        if (args.code) this.send(C2S.JOIN, { code: args.code });
-        else this.send(C2S.QUICKPLAY, { mode: args.mode });
+        // Spread the bots across the classes so a bot match exercises every
+        // weapon rather than eight assault rifles.
+        const classId = CLASS_IDS[this.index % CLASS_IDS.length];
+        if (args.code) this.send(C2S.JOIN, { code: args.code, classId });
+        else this.send(C2S.QUICKPLAY, { mode: args.mode, classId });
         resolve();
       });
 
@@ -148,6 +151,9 @@ class Bot {
         this.weapon = this.inventory[0];
         this.setMap(msg.mapId);
         log(`  ${this.name} joined ${msg.code} (${msg.mode}) on ${msg.mapId}, team ${msg.you.team ?? '-'}`);
+        // A lobby waits for people to ready up, so a room of bots would sit
+        // there until the grace clock expired. Bots are always keen.
+        this.send(C2S.READY, { ready: true });
         this.startLoops();
         break;
 
@@ -159,6 +165,9 @@ class Bot {
         }
         this.phase = msg.phase;
         if (msg.mapId) this.setMap(msg.mapId);
+        // Readiness is cleared when a round begins, so re-opt-in every time the
+        // room falls back to the lobby.
+        if (msg.phase === PHASE.LOBBY) this.send(C2S.READY, { ready: true });
         break;
 
       case S2C.RESPAWN:
