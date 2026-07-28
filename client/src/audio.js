@@ -125,23 +125,59 @@ export function playShot(audioSpec, { pan = 0, distance = 0 } = {}) {
   }
 }
 
-/** Short bright ping when you land a hit. */
-export function playHitmarker(lethal = false) {
+/**
+ * Hit confirmation. `kind` is 'hit', 'head' or 'kill'.
+ *
+ * Three audibly different cues, layered rather than one beep at different
+ * pitches: a body hit is a short click, a headshot adds a bright bell on top,
+ * and a kill is a descending two-note stab you can recognise without looking.
+ * Being able to tell these apart by ear is most of what makes shooting feel good.
+ */
+export function playHitmarker(kind = 'hit') {
   if (!ctx) return;
   const t = now();
-  const osc = ctx.createOscillator();
-  osc.type = 'square';
-  osc.frequency.setValueAtTime(lethal ? 900 : 1500, t);
-  osc.frequency.exponentialRampToValueAtTime(lethal ? 380 : 1100, t + 0.08);
 
-  const g = ctx.createGain();
-  g.gain.setValueAtTime(0.09, t);
-  g.gain.exponentialRampToValueAtTime(0.0001, t + (lethal ? 0.18 : 0.07));
+  const blip = (type, from, to, gain, dur, delay = 0) => {
+    const osc = ctx.createOscillator();
+    osc.type = type;
+    osc.frequency.setValueAtTime(from, t + delay);
+    osc.frequency.exponentialRampToValueAtTime(to, t + delay + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(gain, t + delay);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + delay + dur);
+    osc.connect(g);
+    g.connect(master);
+    osc.start(t + delay);
+    osc.stop(t + delay + dur + 0.02);
+  };
 
-  osc.connect(g);
-  g.connect(master);
-  osc.start(t);
-  osc.stop(t + 0.2);
+  // Body: a tight click with a touch of noise so it cuts through gunfire.
+  blip('square', 1600, 1150, 0.1, 0.06);
+
+  if (kind === 'head') {
+    // Bright bell on top — unmistakably different from a body hit.
+    blip('sine', 2600, 1900, 0.075, 0.14, 0.01);
+    blip('triangle', 1300, 950, 0.05, 0.1, 0.02);
+  }
+
+  if (kind === 'kill') {
+    blip('square', 900, 420, 0.11, 0.16, 0.03);
+    blip('triangle', 520, 240, 0.09, 0.26, 0.1);
+    // A short noise tail gives the stab some body.
+    const noise = noiseSource();
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 900;
+    bp.Q.value = 1.2;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.05, t + 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+    noise.connect(bp);
+    bp.connect(g);
+    g.connect(master);
+    noise.start(t + 0.03);
+    noise.stop(t + 0.24);
+  }
 }
 
 /** Dull thud when you take damage. */
@@ -161,23 +197,94 @@ export function playHurt() {
   osc.stop(t + 0.22);
 }
 
-/** Mechanical click for reloads and weapon switches. */
-export function playClick(pitch = 1) {
+/**
+ * Mechanical click for reloads and weapon switches.
+ *
+ * Optionally positioned, which is what makes it double as the metallic clang of a
+ * bullet striking a barrel somewhere across the map.
+ */
+export function playClick(pitch = 1, { pan = 0, distance = 0 } = {}) {
   if (!ctx) return;
   const t = now();
+  const atten = 1 / (1 + distance * 0.08);
   const noise = noiseSource();
   const bp = ctx.createBiquadFilter();
   bp.type = 'bandpass';
   bp.frequency.value = 2200 * pitch;
   bp.Q.value = 3;
   const g = ctx.createGain();
-  g.gain.setValueAtTime(0.05, t);
+  g.gain.setValueAtTime(0.05 * atten, t);
   g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+
+  const panner = ctx.createStereoPanner();
+  panner.pan.value = Math.max(-1, Math.min(1, pan));
+
   noise.connect(bp);
   bp.connect(g);
-  g.connect(master);
+  g.connect(panner);
+  panner.connect(master);
   noise.start(t);
   noise.stop(t + 0.06);
+}
+
+/**
+ * A barrel going off: a low thump, a broadband roar and a long tail.
+ *
+ * Much longer and lower than a gunshot on purpose — an explosion has to be
+ * instantly distinguishable from someone firing at you.
+ */
+export function playExplosion({ pan = 0, distance = 0 } = {}) {
+  if (!ctx) return;
+  const t = now();
+  const atten = 1 / (1 + distance * 0.045);
+  if (atten < 0.02) return;
+
+  const panner = ctx.createStereoPanner();
+  panner.pan.value = Math.max(-1, Math.min(1, pan));
+  panner.connect(master);
+
+  // Body: a pitch-collapsing sine, which is what gives it weight.
+  const osc = ctx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(90, t);
+  osc.frequency.exponentialRampToValueAtTime(28, t + 0.55);
+  const og = ctx.createGain();
+  og.gain.setValueAtTime(0.75 * atten, t);
+  og.gain.exponentialRampToValueAtTime(0.0001, t + 0.65);
+  osc.connect(og);
+  og.connect(panner);
+  osc.start(t);
+  osc.stop(t + 0.7);
+
+  // Roar: noise through a filter that closes over time, so the blast dulls as it
+  // decays rather than hissing all the way out.
+  const noise = noiseSource();
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.setValueAtTime(Math.max(600, 5200 - distance * 120), t);
+  lp.frequency.exponentialRampToValueAtTime(220, t + 0.8);
+  const ng = ctx.createGain();
+  ng.gain.setValueAtTime(0.6 * atten, t);
+  ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.9);
+  noise.connect(lp);
+  lp.connect(ng);
+  ng.connect(panner);
+  noise.start(t);
+  noise.stop(t + 0.95);
+
+  // Crack on the front, so it starts sharply.
+  const crack = noiseSource();
+  const hp = ctx.createBiquadFilter();
+  hp.type = 'highpass';
+  hp.frequency.value = 1200;
+  const cg = ctx.createGain();
+  cg.gain.setValueAtTime(0.35 * atten, t);
+  cg.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+  crack.connect(hp);
+  hp.connect(cg);
+  cg.connect(panner);
+  crack.start(t);
+  crack.stop(t + 0.14);
 }
 
 /** Rising two-tone for round start, falling for round end. */

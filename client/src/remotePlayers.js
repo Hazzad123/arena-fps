@@ -6,7 +6,10 @@
 // that sticks out in the direction they're looking.
 
 import * as THREE from 'three';
-import { PLAYER_HEIGHT, PLAYER_CROUCH_HEIGHT, TEAM_COLORS, FFA_COLOR } from '@shared/constants.js';
+import {
+  PLAYER_HEIGHT, PLAYER_CROUCH_HEIGHT, TEAM_COLORS, FFA_COLOR,
+  HITBOX_RADIUS, HITBOX_HEAD_PAD,
+} from '@shared/constants.js';
 import { FLAG, hasFlag } from '@shared/protocol.js';
 import { getWeapon } from '@shared/weapons.js';
 import { hasLineOfSight } from '@shared/collision.js';
@@ -139,6 +142,16 @@ function attachCharacter(entity, loaded, color) {
   const height = box.max.y - box.min.y;
   if (height > 0) root.scale.setScalar(PLAYER_HEIGHT / height);
 
+  // The kit authors its characters facing +Z. This game's forward at yaw 0 is -Z
+  // (see aimDirection in localPlayer.js), so without this half turn every remote
+  // player renders facing exactly away from where they are aiming and walking —
+  // you see their back as they run at you.
+  //
+  // Corrected here on the model root rather than by changing the yaw applied to
+  // entity.group, because that yaw is also what orients the fallback box figure,
+  // the weapon pivot and the name-tag occlusion ray.
+  root.rotation.y = Math.PI;
+
   const held = new Map();
   const teamMats = [];
 
@@ -268,10 +281,33 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
     }
     if (info && entity.label.textContent !== info.name) entity.label.textContent = info.name;
 
+    // ---- death ----
+    // The body stays and plays the rig's Death clip rather than blinking out of
+    // existence. Previously the group was hidden the instant the DEAD flag
+    // arrived, so the clip — which the kit provides and clipFor already asks
+    // for — was never seen once.
     const dead = hasFlag(state.flags, FLAG.DEAD);
-    entity.group.visible = !dead;
-    entity.label.style.display = dead ? 'none' : 'block';
-    if (dead) continue;
+    if (dead) {
+      entity.label.style.display = 'none';
+      entity.group.visible = true;
+      // Freeze where they fell. The server stops updating a dead player's
+      // position, so this is their last living pose.
+      entity.group.position.set(state.pos[0], state.pos[1], state.pos[2]);
+
+      if (entity.character) {
+        entity.group.scale.y = 1;
+        // LoopOnce and clamped, so it settles on the floor instead of looping.
+        playClip(entity.character, 'Death', { loop: false });
+        entity.character.mixer.update(dt);
+      } else {
+        // Box figure has no clips, so tip it over instead.
+        entity.group.rotation.x = Math.min(entity.group.rotation.x + dt * 4.5, Math.PI / 2);
+      }
+      continue;
+    }
+
+    // Back on their feet: undo anything the death pose changed.
+    entity.group.rotation.x = 0;
 
     // ---- pose ----
     entity.group.position.set(state.pos[0], state.pos[1], state.pos[2]);
@@ -425,11 +461,14 @@ export function hitboxesFrom(states, myId) {
   for (const [id, state] of states) {
     if (id === myId) continue;
     if (hasFlag(state.flags, FLAG.DEAD)) continue;
+    const standing = hasFlag(state.flags, FLAG.CROUCH) ? PLAYER_CROUCH_HEIGHT : PLAYER_HEIGHT;
     out.push({
       id,
       pos: state.pos,
-      height: hasFlag(state.flags, FLAG.CROUCH) ? PLAYER_CROUCH_HEIGHT : PLAYER_HEIGHT,
-      radius: 0.4,
+      // Slightly taller and wider than the body actually is — see HITBOX_* in
+      // constants.js for why being generous here is the right call.
+      height: standing + HITBOX_HEAD_PAD,
+      radius: HITBOX_RADIUS,
     });
   }
   return out;

@@ -190,7 +190,11 @@ export function loadMap(world, map) {
   const surfaces = buildSurfaces(map, mesh);
   world.scene.add(surfaces);
 
-  world.current = { map, mesh, props, surfaces, generation: ++loadGeneration };
+  world.current = {
+    map, mesh, props, surfaces,
+    generation: ++loadGeneration,
+    propByIndex: new Map(),
+  };
 
   dressMap(world, map, mesh, props, world.current.generation);
   scatterProps(world, map, props, world.current.generation);
@@ -211,6 +215,7 @@ function buildSurfaces(map, mesh) {
   map.solids.forEach((solid, index) => {
     // Props draw their own model; don't texture them as well.
     if (solid.tag === 'crate' || solid.tag?.startsWith('prop:')) return;
+    if (solid.tag?.startsWith('barrel:')) return;
     const name = surfaceFor(solid, map);
     if (!name || !TEXTURES[name]) return;
 
@@ -294,6 +299,9 @@ async function dressMap(world, map, mesh, props, generation) {
   map.solids.forEach((s, i) => {
     if (s.tag === 'crate') wanted.push({ index: i, file: null });
     else if (s.tag?.startsWith('prop:')) wanted.push({ index: i, file: s.tag.slice(5) });
+    // Explosive barrels are drawn the same way, but kept in a registry so the
+    // one that just blew up can be found again by index.
+    else if (s.tag?.startsWith('barrel:')) wanted.push({ index: i, file: s.tag.slice(7) });
   });
   if (wanted.length === 0) return;
 
@@ -341,6 +349,7 @@ async function dressMap(world, map, mesh, props, generation) {
     instance.rotation.y = (index % 4) * (Math.PI / 2);
 
     props.add(instance);
+    world.current?.propByIndex?.set(index, instance);
     mesh.setMatrixAt(index, hidden);
     placed++;
   }
@@ -355,10 +364,13 @@ async function dressMap(world, map, mesh, props, generation) {
 // room — the difference between pipes climbing a wall and pipes sticking out of
 // it. Everything here is kept small or flush: these are drawn, not collided
 // with, so anything big enough to read as cover would be a lie.
+// No ExplodingBarrel here on purpose. Barrels are now real, destructible map
+// objects placed by hand (see barrel() in maps/helpers.js). Scattering
+// identical-looking ones that *don't* explode would teach players the wrong
+// lesson about which barrels are worth shooting.
 const GROUND_PROPS = [
   { file: 'Pipes', height: 4.2, standoff: 0.35, flat: true },
   { file: 'Barrier_Single', height: 1.1, standoff: 0.9 },
-  { file: 'ExplodingBarrel', height: 1.05, standoff: 0.7 },
   { file: 'TrashContainer', height: 1.35, standoff: 0.95, flat: true },
   { file: 'Pallet', height: 0.9, standoff: 0.35, flat: true },
   { file: 'CardboardBoxes_1', height: 0.55, standoff: 0.7 },
@@ -536,6 +548,37 @@ export function unloadMap(world) {
     }
   }
   world.current = null;
+}
+
+/**
+ * Turn a barrel into a burnt-out husk.
+ *
+ * It stays where it is and keeps colliding, because the collision box lives in
+ * the shared, cached map data that every room on the server reads — mutating it
+ * for one match would silently change the level for all of them. A spent barrel
+ * being cover you can still hide behind is also just fine: it reads as debris,
+ * and the important thing (it can't be detonated again) is server state.
+ */
+export function scorchBarrel(world, index) {
+  const instance = world.current?.propByIndex?.get(index);
+  if (!instance || instance.userData.scorched) return;
+  instance.userData.scorched = true;
+
+  instance.traverse((node) => {
+    if (!node.isMesh && !node.isSkinnedMesh) return;
+    const mats = Array.isArray(node.material) ? node.material : [node.material];
+    // Cloned before recolouring: the loader shares materials between instances,
+    // so recolouring in place would blacken every barrel on the map at once.
+    const replaced = mats.map((m) => {
+      const c = m.clone();
+      c.color.multiplyScalar(0.16);
+      return c;
+    });
+    node.material = Array.isArray(node.material) ? replaced : replaced[0];
+  });
+
+  // Squat down a little, as if it's been blown open.
+  instance.scale.y *= 0.72;
 }
 
 export function createCamera(fov) {

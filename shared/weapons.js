@@ -31,6 +31,7 @@ export const WEAPONS = {
     falloffFloor: 0.6,
     recoil: { up: 1.5, side: 0.5, recoverPerSec: 9 },
     adsZoom: 1.15,
+    adsSensitivity: 0.93,
     moveMult: 1.0,
     viewColor: 0x3a3a42,
     tracerColor: 0xffe08a,
@@ -55,6 +56,7 @@ export const WEAPONS = {
     falloffFloor: 0.5,
     recoil: { up: 0.9, side: 0.55, recoverPerSec: 11 },
     adsZoom: 1.2,
+    adsSensitivity: 0.91,
     moveMult: 1.0,
     viewColor: 0x4a4a52,
     tracerColor: 0xfff0b0,
@@ -79,6 +81,7 @@ export const WEAPONS = {
     falloffFloor: 0.18,
     recoil: { up: 4.2, side: 1.1, recoverPerSec: 7 },
     adsZoom: 1.05,
+    adsSensitivity: 0.97,
     moveMult: 0.96,
     viewColor: 0x5a3e2a,
     tracerColor: 0xffd48a,
@@ -103,6 +106,7 @@ export const WEAPONS = {
     falloffFloor: 0.6,
     recoil: { up: 1.35, side: 0.42, recoverPerSec: 10 },
     adsZoom: 1.35,
+    adsSensitivity: 0.81,
     moveMult: 0.97,
     viewColor: 0x38403a,
     tracerColor: 0xfff2c0,
@@ -127,6 +131,7 @@ export const WEAPONS = {
     falloffFloor: 1.0,
     recoil: { up: 6.0, side: 0.8, recoverPerSec: 5 },
     adsZoom: 4.0,
+    adsSensitivity: 0.34, // 4x optic: without this the scope is unusable
     moveMult: 0.9,
     viewColor: 0x2e3540,
     tracerColor: 0xbfe4ff,
@@ -151,6 +156,7 @@ export const WEAPONS = {
     falloffFloor: 0.65,
     recoil: { up: 1.1, side: 0.7, recoverPerSec: 7 },
     adsZoom: 1.25,
+    adsSensitivity: 0.88,
     moveMult: 0.88, // heavy
     viewColor: 0x3d4238,
     tracerColor: 0xffe49a,
@@ -175,6 +181,7 @@ export const WEAPONS = {
     falloffFloor: 0.72,
     recoil: { up: 3.1, side: 0.5, recoverPerSec: 6.5 },
     adsZoom: 2.2,
+    adsSensitivity: 0.58,
     moveMult: 0.94,
     viewColor: 0x4a4034,
     tracerColor: 0xcfe8ff,
@@ -199,6 +206,7 @@ export const WEAPONS = {
     falloffFloor: 1.0,
     recoil: { up: 0.4, side: 0.3, recoverPerSec: 14 },
     adsZoom: 1.0,
+    adsSensitivity: 1.0, // no optic, no change
     moveMult: 1.06, // knife out, run faster
     viewColor: 0x9aa0a8,
     tracerColor: 0x000000,
