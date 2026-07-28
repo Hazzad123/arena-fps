@@ -65,27 +65,19 @@ code fills itself in. "Quick play" drops you into any room with space.
 
 ## Deploying
 
-You need an account with a host. Both of these handle WebSockets and HTTPS on
-their cheap tiers. **You'll need to run this yourself** — it's your account and
-your card.
-
-### Fly.io
-
-Edit `fly.toml` and set `primary_region` to whichever region is closest to your
-office. Ping is the one performance factor you actually control.
+**See [DEPLOY.md](DEPLOY.md) for the step-by-step.** Short version: push to
+GitHub, then point Render at the repo — `render.yaml` and `Dockerfile` are already
+here, so there's nothing to configure by hand.
 
 ```bash
-fly launch --no-deploy
+gh repo create arena-fps --private --source=. --remote=origin --push
 ```
 
-```bash
-fly deploy
-```
+Then **dashboard.render.com → New → Blueprint → pick the repo → Apply.**
 
-### Render, Railway, or anything else that takes a Dockerfile
-
-Point it at this repo. It builds the included `Dockerfile` and needs no config
-beyond `PORT` (which it will set for you). Make sure WebSockets are enabled.
+A `fly.toml` is included too if you'd rather use Fly.io (`fly launch --no-deploy`
+then `fly deploy`); it deploys straight from this folder without needing GitHub,
+but wants the `flyctl` CLI installed.
 
 ### What to know before you do
 
