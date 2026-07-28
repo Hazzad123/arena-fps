@@ -22,6 +22,7 @@ const KEY_MAP = {
   KeyC: 'crouch',
   KeyR: 'reload',
   KeyT: 'resetPractice',
+  KeyL: 'lobby',
   Tab: 'scoreboard',
 };
 
@@ -34,6 +35,7 @@ export const input = {
   sprint: false,
   crouch: false,
   reload: false,
+  lobby: false,
   scoreboard: false,
   firing: false,
   ads: false,

@@ -72,6 +72,17 @@
       </div>
 
       <div id="scoreboard" class="hidden"></div>
+
+      <!-- end of match. Separate from the Tab scoreboard: that one is a glance
+           mid-round, this one is the whole result. -->
+      <div id="results" class="hidden">
+        <div class="rs-eyebrow">Round over</div>
+        <div id="rs-headline">—</div>
+        <div id="rs-score"></div>
+        <div id="rs-table"></div>
+        <div id="rs-next"></div>
+        <div id="rs-regroup"></div>
+      </div>
     </div>
 
     <!-- ================= menu ================= -->
@@ -188,6 +199,7 @@
         </div>
 
         <button id="btn-resume" class="primary wide">Resume</button>
+        <button id="btn-to-lobby" class="ghost wide hidden">Back to lobby</button>
 
         <div id="pause-class" class="pause-section hidden">
           <div class="label">Class — applies on your next spawn</div>

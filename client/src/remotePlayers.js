@@ -9,6 +9,7 @@ import * as THREE from 'three';
 import { PLAYER_HEIGHT, PLAYER_CROUCH_HEIGHT, TEAM_COLORS, FFA_COLOR } from '@shared/constants.js';
 import { FLAG, hasFlag } from '@shared/protocol.js';
 import { getWeapon } from '@shared/weapons.js';
+import { hasLineOfSight } from '@shared/collision.js';
 
 const SKIN = 0xc8a583;
 
@@ -98,7 +99,7 @@ function colorFor(mode, myTeam, theirTeam) {
  * `states` is the Map from net.sampleWorld(). Entities are created and destroyed
  * to match, so players joining and leaving mid-round is handled here.
  */
-export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, camera }) {
+export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, camera, solids }) {
   const seen = new Set();
 
   for (const [id, state] of states) {
@@ -167,7 +168,7 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
       entity.weapon.material.color.setHex(w.viewColor).multiplyScalar(1.4);
     }
 
-    positionLabel(entity, camera, crouched);
+    positionLabel(entity, camera, crouched, solids);
   }
 
   // Remove anyone no longer present.
@@ -179,16 +180,52 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
 }
 
 const tmpVec = new THREE.Vector3();
+const rayFrom = [0, 0, 0];
+const rayTo = [0, 0, 0];
 
-function positionLabel(entity, camera, crouched) {
-  const height = (crouched ? PLAYER_CROUCH_HEIGHT : PLAYER_HEIGHT) + 0.3;
-  tmpVec.set(entity.group.position.x, entity.group.position.y + height, entity.group.position.z);
+// Where on the body to test for visibility, as a fraction of its height. The tag
+// floats above the head, and testing only that one point makes it blink off
+// whenever the anchor clips a doorframe the player is plainly standing in.
+const SIGHT_SAMPLES = [0.92, 0.55, 0.2];
 
+/**
+ * Can we actually see this player?
+ *
+ * The figures are real meshes and depth-test themselves, but a name tag is a DOM
+ * element drawn over the entire scene — so without this check every tag reads
+ * straight through walls, which is a free wallhack. Friendly tags are occluded
+ * too: friendly fire is off, so knowing exactly where a teammate is standing
+ * behind a wall is information nobody needs.
+ */
+function canSee(camera, base, bodyHeight, solids) {
+  rayFrom[0] = camera.position.x;
+  rayFrom[1] = camera.position.y;
+  rayFrom[2] = camera.position.z;
+
+  for (const fraction of SIGHT_SAMPLES) {
+    rayTo[0] = base.x;
+    rayTo[1] = base.y + bodyHeight * fraction;
+    rayTo[2] = base.z;
+    if (hasLineOfSight(rayFrom, rayTo, solids)) return true;
+  }
+  return false;
+}
+
+function positionLabel(entity, camera, crouched, solids) {
+  const bodyHeight = crouched ? PLAYER_CROUCH_HEIGHT : PLAYER_HEIGHT;
+  const base = entity.group.position;
+
+  tmpVec.set(base.x, base.y + bodyHeight + 0.3, base.z);
   const distance = tmpVec.distanceTo(camera.position);
   tmpVec.project(camera);
 
   // Behind the camera, or far enough away that the tag is just clutter.
   if (tmpVec.z > 1 || distance > 70) {
+    entity.label.style.display = 'none';
+    return;
+  }
+
+  if (solids && !canSee(camera, base, bodyHeight, solids)) {
     entity.label.style.display = 'none';
     return;
   }

@@ -67,6 +67,10 @@ const app = {
     teamScores: { A: 0, B: 0 },
     roster: new Map(),
     resultText: null,
+    result: null,
+    nextMapId: null,
+    // Ids of players who asked to regroup in the lobby after this round.
+    regroup: [],
 
     // Lobby, also mirrored. startsAt is on the local clock; 0 means no clock is
     // running (not enough people have readied up yet).
@@ -101,7 +105,7 @@ for (const id of [
   'lobby-host', 'lobby-mode-select', 'lobby-map-select', 'lobby-class', 'lobby-class-picker',
   'btn-copy-link', 'btn-leave', 'btn-ready', 'btn-start',
   'pause', 'pause-note', 'pause-class', 'pause-class-picker', 'pause-guns',
-  'pause-gun-picker', 'pause-settings', 'btn-resume', 'btn-quit',
+  'pause-gun-picker', 'pause-settings', 'btn-resume', 'btn-quit', 'btn-to-lobby',
   'p-sens', 'p-sens-val', 'p-fov', 'p-fov-val', 'p-vol', 'p-vol-val', 'p-invert-y',
   'respawn-class', 'respawn-class-picker',
 ]) dom[id] = document.getElementById(id);
@@ -287,6 +291,7 @@ function enterLobby() {
   dom.lobby.classList.remove('hidden');
   hud.showHud(false);
   hud.showRespawn(false);
+  hud.showResults(false);
   // A round can end while the pause menu is open; the lobby has its own buttons.
   showPause(false);
   renderLobby();
@@ -325,6 +330,7 @@ function leaveToMenu() {
   hud.showHud(false);
   hud.showScoreboard(false);
   hud.showRespawn(false);
+  hud.showResults(false);
   hud.clearKillfeed();
   showPause(false);
   dom.lobby.classList.add('hidden');
@@ -443,6 +449,17 @@ function showPause(visible) {
   dom['pause-class'].classList.toggle('hidden', !inMatch || app.match.mode === 'gungame');
   dom['pause-guns'].classList.toggle('hidden', app.screen !== 'practice');
 
+  // Regrouping only means anything between rounds, which is also the only time
+  // the mouse is any use for it — hence the same action on `L` on the results
+  // screen, where the pointer is still locked.
+  const canRegroup = inMatch && app.match.phase === PHASE.SCOREBOARD;
+  dom['btn-to-lobby'].classList.toggle('hidden', !canRegroup);
+  if (canRegroup) {
+    const asked = app.match.regroup.includes(connection.myId);
+    dom['btn-to-lobby'].textContent = asked ? 'Back to lobby ✓' : 'Back to lobby';
+    dom['btn-to-lobby'].classList.toggle('asked', asked);
+  }
+
   if (app.screen === 'practice') {
     highlightPicker(dom['pause-gun-picker'], player.inventory[player.slotIndex]);
   }
@@ -454,6 +471,8 @@ function showPause(visible) {
 // released it, and hiding optimistically would drop you into the game with no
 // cursor, no crosshair control and nothing to click.
 dom['btn-resume'].addEventListener('click', () => requestLock());
+
+dom['btn-to-lobby'].addEventListener('click', () => toggleRegroup());
 
 dom['btn-quit'].addEventListener('click', () => leaveToMenu());
 
@@ -569,8 +588,15 @@ function renderLobby() {
   dom['lobby-mode-select'].value = m.mode;
   dom['lobby-map-select'].value = app.map?.id ?? '';
 
+  // Everything below is only actionable once the room is actually in the lobby;
+  // between rounds you're just waiting to be dropped into the next one.
+  const inLobbyPhase = m.phase === PHASE.LOBBY;
   dom['btn-start'].classList.toggle('hidden', !iAmHost());
-  dom['btn-start'].disabled = players.length < (m.lobby.minPlayers || 2);
+  dom['btn-start'].disabled = !inLobbyPhase || players.length < (m.lobby.minPlayers || 2);
+  dom['btn-ready'].disabled = !inLobbyPhase;
+  for (const select of [dom['lobby-mode-select'], dom['lobby-map-select']]) {
+    select.disabled = !inLobbyPhase;
+  }
 
   // Gun Game marches everyone up the same ladder, so a class would be a lie.
   dom['lobby-class'].classList.toggle('hidden', m.mode === 'gungame');
@@ -612,6 +638,15 @@ function updateLobbyStatus() {
 
   if (app.lobbyNotice) {
     status.textContent = app.lobbyNotice;
+    return;
+  }
+
+  // Joining between rounds lands you on the lobby panel while the room is still
+  // finishing its scoreboard. Readying up is rejected until the room is actually
+  // in the lobby, so say what's happening rather than offering a button that
+  // silently does nothing.
+  if (m.phase !== PHASE.LOBBY) {
+    status.textContent = 'Round in progress — you’ll be dropped in when the next one starts.';
     return;
   }
 
@@ -723,11 +758,24 @@ net.on(connection, S2C.LOBBY, (msg) => {
 net.on(connection, S2C.PHASE, (msg) => {
   const m = app.match;
   const previous = m.phase;
+  const wasScoreboard = previous === PHASE.SCOREBOARD;
   m.phase = msg.phase;
   m.phaseEndsAt = performance.now() + (msg.msLeft ?? 0);
   m.teamScores = msg.teamScores ?? m.teamScores;
   m.resultText = msg.resultText ?? null;
+  m.result = msg.result ?? null;
+  m.nextMapId = msg.nextMapId ?? null;
+  m.regroup = msg.regroup ?? [];
+  m.mode = msg.mode ?? m.mode;
   if (msg.roster) updateRoster(msg.roster);
+
+  // A regroup request re-sends the scoreboard phase to everyone. Redraw the
+  // footer rather than the whole panel, so it doesn't flicker mid-read.
+  if (wasScoreboard && msg.phase === PHASE.SCOREBOARD) {
+    updateResultsFooter();
+    if (pauseVisible()) showPause(true); // relabel its regroup button
+    return;
+  }
 
   // Map rotates between rounds.
   if (msg.mapId && msg.mapId !== app.map?.id) applyMap(msg.mapId);
@@ -738,6 +786,7 @@ net.on(connection, S2C.PHASE, (msg) => {
     case PHASE.COUNTDOWN:
       if (app.screen !== 'match') enterMatch();
       hud.showScoreboard(false);
+      hud.showResults(false);
       hud.clearKillfeed();
       app.lastCountdownBeep = -1;
       hud.setStateBanner('Get ready');
@@ -745,14 +794,19 @@ net.on(connection, S2C.PHASE, (msg) => {
 
     case PHASE.LIVE:
       hud.showScoreboard(false);
+      hud.showResults(false);
       hud.setStateBanner('');
       if (previous !== PHASE.LIVE) audio.playFanfare(true);
       break;
 
     case PHASE.SCOREBOARD:
-      hud.setStateBanner(m.resultText ?? 'Round over');
+      hud.setStateBanner('');
       hud.showRespawn(false);
-      showFullScoreboard();
+      hud.showScoreboard(false);
+      showResults();
+      // Back-to-lobby only exists between rounds, so the pause menu needs to
+      // pick the button up if it was already open when the round ended.
+      if (pauseVisible()) showPause(true);
       audio.playFanfare(false);
       break;
 
@@ -876,6 +930,41 @@ function showFullScoreboard() {
     players: [...app.match.roster.values()],
     myId: connection.myId,
   });
+}
+
+// ------------------------------------------------------------- end of match
+
+function showResults() {
+  const m = app.match;
+  hud.showResults(true, {
+    result: m.result,
+    resultText: m.resultText,
+    mode: m.mode,
+    teamScores: m.teamScores,
+    players: [...m.roster.values()],
+    myId: connection.myId,
+  });
+  updateResultsFooter();
+}
+
+/** Footer only — the countdown to the next round and the regroup state. */
+function updateResultsFooter() {
+  const m = app.match;
+  hud.updateResultsFooter({
+    nextMapName: m.nextMapId ? getMap(m.nextMapId).name : null,
+    msLeft: Math.max(0, m.phaseEndsAt - performance.now()),
+    regrouping: m.regroup.length,
+    askedByMe: m.regroup.includes(connection.myId),
+    returning: m.regroup.length > 0,
+  });
+}
+
+/** Ask to go back to the lobby instead of rolling into the next round. */
+function toggleRegroup() {
+  if (app.match.phase !== PHASE.SCOREBOARD) return;
+  const on = !app.match.regroup.includes(connection.myId);
+  net.send(connection, C2S.TO_LOBBY, { on });
+  audio.playClick();
 }
 
 // ------------------------------------------------------------- pointer lock UX
@@ -1126,6 +1215,8 @@ function step(dt, now) {
         myTeam: app.match.myTeam,
         roster: app.match.roster,
         camera,
+        // Name tags are DOM, so they need the map to know what's hiding a player.
+        solids: app.map.solids,
       });
     }
     updateMatchHud(now);
@@ -1181,6 +1272,13 @@ function updateMatchHud(now) {
   if (m.phase === PHASE.LIVE) {
     if (input.scoreboard) showFullScoreboard();
     else hud.showScoreboard(false);
+  }
+
+  if (m.phase === PHASE.SCOREBOARD) {
+    updateResultsFooter();
+    // Pointer lock is still held at round end, so the results screen is worked
+    // with the keyboard — same reason the death screen is.
+    if (consumePressed('lobby')) toggleRegroup();
   }
 }
 
