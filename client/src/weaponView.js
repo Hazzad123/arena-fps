@@ -1,12 +1,33 @@
-// First-person weapon models, tracers and impact effects — all built from boxes
-// in code. No models to download, no rigs, no licences.
+// First-person weapon models, tracers and impact effects.
 //
-// The guns are deliberately chunky and readable rather than realistic. What
-// actually sells a shooter isn't polygon count, it's the motion: the kick when
-// you fire, the sway when you turn, the way the gun settles when you stop.
+// Every gun exists twice: as boxes built in code, and as a glTF model fetched at
+// runtime. The boxes are what you see until the model arrives, and what you keep
+// if it never does. What actually sells a shooter isn't polygon count anyway,
+// it's the motion — the kick when you fire, the sway when you turn, the way the
+// gun settles when you stop — and all of that is applied to the group both
+// versions live in, so it works either way.
 
 import * as THREE from 'three';
 import { getWeapon } from '@shared/weapons.js';
+import { loadModel, instantiate } from './models.js';
+
+// Which model stands in for which weapon, and which way it was modelled facing.
+// The kit's guns lie along -X; the knife points +Y. Nothing detects this
+// automatically because guessing the sign of a model's forward axis from its
+// bounding box is exactly the kind of cleverness that puts a barrel through
+// somebody's eye.
+const GUN_MODELS = {
+  rifle: { file: 'AK', forward: '-x' },
+  smg: { file: 'SMG', forward: '-x' },
+  pistol: { file: 'Pistol', forward: '-x' },
+  shotgun: { file: 'Shotgun', forward: '-x' },
+  sniper: { file: 'Sniper', forward: '-x' },
+  dmr: { file: 'Sniper_2', forward: '-x' },
+  lmg: { file: 'ShortCannon', forward: '-x' },
+  knife: { file: 'Knife_1', forward: '+y' },
+};
+
+const GUN_URL = (file) => `models/guns/${file}.gltf`;
 
 // Each part is [x, y, z, w, h, d, colorMultiplier, part?]. Local space: the gun
 // points down -Z, like the camera.
@@ -172,8 +193,30 @@ export function createWeaponView() {
 
     group.visible = false;
     root.add(group);
-    models[id] = { group, flash, moving, muzzle: new THREE.Vector3(...MUZZLE[id]) };
+    // The volume the boxes occupy, computed straight from the numbers above
+    // rather than from the scene graph. It has to be in the group's own local
+    // space, and asking three for a bounding box would give world space — the
+    // root's scale and the group's per-frame position baked in.
+    const bounds = new THREE.Box3();
+    for (const [x, y, z, w, h, d] of parts) {
+      bounds.expandByPoint(new THREE.Vector3(x - w / 2, y - h / 2, z - d / 2));
+      bounds.expandByPoint(new THREE.Vector3(x + w / 2, y + h / 2, z + d / 2));
+    }
+
+    models[id] = {
+      group,
+      flash,
+      moving,
+      muzzle: new THREE.Vector3(...MUZZLE[id]),
+      // The boxes, so a loaded model can take their place, and the space they
+      // occupy, which is what it gets fitted to.
+      boxes: group.children.filter((c) => c !== flash),
+      bounds,
+      usingModel: false,
+    };
   }
+
+  loadGunModels(models);
 
   return {
     scene,
@@ -189,6 +232,67 @@ export function createWeaponView() {
     flashUntil: 0,
     lowerAmount: 0,
   };
+}
+
+const FORWARD_ROTATION = {
+  '-x': (o) => {
+    o.rotation.y = -Math.PI / 2;
+  },
+  '+y': (o) => {
+    o.rotation.x = -Math.PI / 2;
+  },
+};
+
+/**
+ * Fit a loaded gun into the space its box version occupies, then swap them.
+ *
+ * Matching the box's bounding box rather than picking a scale by eye is what
+ * makes this safe: the hip and aimed poses, the muzzle offset, the reload dip and
+ * the walking bob are all tuned against that volume, so a model that fills the
+ * same volume inherits every one of them without a single number changing.
+ */
+function fitGunModel(model, loaded, forward) {
+  const pivot = new THREE.Group();
+  pivot.add(instantiate(loaded));
+  FORWARD_ROTATION[forward]?.(pivot);
+
+  const target = model.bounds;
+
+  // Detached, so its world matrix is its local one and the box comes back in the
+  // space it will be added into.
+  pivot.updateMatrixWorld(true);
+  const current = new THREE.Box3().setFromObject(pivot);
+
+  const targetSize = target.getSize(new THREE.Vector3());
+  const currentSize = current.getSize(new THREE.Vector3());
+  if (currentSize.z <= 0 || targetSize.z <= 0) return null;
+
+  pivot.scale.setScalar(targetSize.z / currentSize.z);
+  pivot.updateMatrixWorld(true);
+
+  const scaled = new THREE.Box3().setFromObject(pivot);
+  pivot.position.sub(scaled.getCenter(new THREE.Vector3())).add(target.getCenter(new THREE.Vector3()));
+
+  return pivot;
+}
+
+function loadGunModels(models) {
+  for (const [id, { file, forward }] of Object.entries(GUN_MODELS)) {
+    const model = models[id];
+    if (!model) continue;
+
+    loadModel(GUN_URL(file)).then((loaded) => {
+      if (!loaded) return; // keep the boxes
+      const fitted = fitGunModel(model, loaded, forward);
+      if (!fitted) return;
+
+      model.group.add(fitted);
+      // Hidden rather than removed: poseReload still drives the magazine and
+      // pump parts, and if anything above went wrong we can put them back.
+      for (const box of model.boxes) box.visible = false;
+      model.usingModel = true;
+    });
+  }
 }
 
 /** Second render pass, on top of the world, sharing the depth-cleared buffer. */

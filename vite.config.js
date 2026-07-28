@@ -5,7 +5,10 @@ const root = fileURLToPath(new URL('.', import.meta.url));
 
 export default defineConfig({
   root: 'client',
-  publicDir: false,
+  // client/public holds the glTF models, copied to dist verbatim. They're fetched
+  // at runtime rather than bundled: 3MB of geometry has no business blocking the
+  // first paint, and the game is playable without them.
+  publicDir: 'public',
   resolve: {
     alias: {
       '@shared': fileURLToPath(new URL('./shared', import.meta.url)),

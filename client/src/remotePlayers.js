@@ -10,11 +10,56 @@ import { PLAYER_HEIGHT, PLAYER_CROUCH_HEIGHT, TEAM_COLORS, FFA_COLOR } from '@sh
 import { FLAG, hasFlag } from '@shared/protocol.js';
 import { getWeapon } from '@shared/weapons.js';
 import { hasLineOfSight } from '@shared/collision.js';
+import { loadModel, instantiate } from './models.js';
 
 const SKIN = 0xc8a583;
 
+const CHARACTER_URL = 'models/characters/Character_Soldier.gltf';
+
+// The material the kit leaves for team colour. Everything else — skin, boots,
+// webbing — stays as authored, so a blue and a red soldier still read as the same
+// soldier rather than two different men.
+const TEAM_MATERIAL = 'Character_Main';
+
+// The character carries every gun in the kit as a child mesh, so "equip" is just
+// deciding which one to show. Weapons with no counterpart borrow the nearest
+// thing rather than leaving empty hands.
+const HELD_MESH = {
+  rifle: 'AK',
+  smg: 'SMG',
+  pistol: 'Pistol',
+  shotgun: 'Shotgun',
+  sniper: 'Sniper',
+  dmr: 'Sniper_2',
+  lmg: 'ShortCannon',
+  knife: 'Knife_1',
+};
+const ALL_HELD = [...new Set(Object.values(HELD_MESH))];
+
+/**
+ * Which clip suits a given state. The kit's 17 clips happen to line up almost
+ * exactly with the flags already in the snapshot, which is why this is a lookup
+ * and not an animation system.
+ */
+function clipFor({ dead, airborne, crouched, moving, sprinting, firing }) {
+  if (dead) return 'Death';
+  if (airborne) return 'Jump_Idle';
+  if (crouched) return 'Duck';
+  if (moving) {
+    if (sprinting) return firing ? 'Run_Shoot' : 'Run';
+    return firing ? 'Walk_Shoot' : 'Walk';
+  }
+  return firing ? 'Idle_Shoot' : 'Idle';
+}
+
 export function createRemotePlayers(scene) {
-  return { scene, entities: new Map(), labelLayer: createLabelLayer() };
+  // Loaded once and cloned per player. Fire-and-forget: until it arrives (or if
+  // it never does) everyone is a box figure, which is playable, just plainer.
+  const character = { model: null };
+  loadModel(CHARACTER_URL).then((loaded) => {
+    character.model = loaded;
+  });
+  return { scene, entities: new Map(), labelLayer: createLabelLayer(), character };
 }
 
 function createLabelLayer() {
@@ -66,7 +111,91 @@ function buildFigure(color) {
   armPivot.add(weapon);
   group.add(armPivot);
 
-  return { group, armPivot, weapon, legL, legR, mats: [teamMat, darkMat, skinMat] };
+  return {
+    group,
+    armPivot,
+    weapon,
+    legL,
+    legR,
+    mats: [teamMat, darkMat, skinMat],
+    // Kept so the character model can hide them without disturbing the group.
+    boxMeshes: [...group.children],
+  };
+}
+
+/**
+ * Swap an entity's box figure for the real character, once the model is here.
+ *
+ * The boxes are hidden rather than removed: this is decoration over a working
+ * game, and nothing about hitboxes, collision or the network changes — those come
+ * from the snapshot, not from whatever is drawn at that position.
+ */
+function attachCharacter(entity, loaded, color) {
+  const root = instantiate(loaded);
+
+  // Authored a shade over 1.8m; make it exactly the player's height so feet meet
+  // the floor the physics uses.
+  const box = new THREE.Box3().setFromObject(root);
+  const height = box.max.y - box.min.y;
+  if (height > 0) root.scale.setScalar(PLAYER_HEIGHT / height);
+
+  const held = new Map();
+  const teamMats = [];
+
+  // The guns are *nodes*, and a node whose mesh has several materials arrives as
+  // a Group of meshes named after the Blender primitives inside it (Cube004 and
+  // friends). So the name has to be matched on every object, not just meshes —
+  // matching meshes alone finds nothing, and a character then holds all sixteen
+  // guns at once.
+  root.traverse((node) => {
+    if (ALL_HELD.includes(node.name)) {
+      held.set(node.name, node);
+      node.visible = false;
+      return;
+    }
+    if (!node.isMesh && !node.isSkinnedMesh) return;
+    const mats = Array.isArray(node.material) ? node.material : [node.material];
+    for (const m of mats) if (m.name === TEAM_MATERIAL) teamMats.push(m);
+  });
+
+  const mixer = new THREE.AnimationMixer(root);
+  const clips = new Map();
+  for (const clip of loaded.animations) clips.set(clip.name, clip);
+
+  entity.group.add(root);
+  for (const mesh of entity.boxMeshes) mesh.visible = false;
+
+  entity.character = { root, mixer, clips, held, teamMats, action: null, clipName: null };
+  setCharacterColor(entity, color);
+  return entity.character;
+}
+
+function setCharacterColor(entity, color) {
+  for (const m of entity.character.teamMats) m.color.setHex(color);
+}
+
+/** Crossfade to a clip, or do nothing if it's already the one playing. */
+function playClip(character, name, { loop = true } = {}) {
+  if (character.clipName === name) return;
+  const clip = character.clips.get(name);
+  if (!clip) return;
+
+  const next = character.mixer.clipAction(clip);
+  next.reset();
+  next.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
+  next.clampWhenFinished = !loop;
+  next.fadeIn(0.15).play();
+
+  if (character.action) character.action.fadeOut(0.15);
+  character.action = next;
+  character.clipName = name;
+}
+
+function showHeldWeapon(character, weaponId) {
+  const wanted = HELD_MESH[weaponId];
+  if (character.heldName === wanted) return;
+  character.heldName = wanted;
+  for (const [name, mesh] of character.held) mesh.visible = name === wanted;
 }
 
 function makeLabel(layer, name) {
@@ -99,7 +228,7 @@ function colorFor(mode, myTeam, theirTeam) {
  * `states` is the Map from net.sampleWorld(). Entities are created and destroyed
  * to match, so players joining and leaving mid-round is handled here.
  */
-export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, camera, solids }) {
+export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, camera, solids, dt = 0 }) {
   const seen = new Set();
 
   for (const [id, state] of states) {
@@ -118,8 +247,15 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
         team: info?.team ?? null,
         stridePhase: 0,
         lastPos: [...state.pos],
+        character: null,
       };
       rp.entities.set(id, entity);
+    }
+
+    // The model may finish loading long after the first players appear, so this
+    // is checked here rather than only at creation.
+    if (!entity.character && rp.character.model) {
+      attachCharacter(entity, rp.character.model, colorFor(mode, myTeam, info?.team));
     }
 
     // Team can change when the server rebalances.
@@ -128,6 +264,7 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
       const c = colorFor(mode, myTeam, info.team);
       entity.mats[0].color.setHex(c);
       entity.mats[1].color.setHex(c).multiplyScalar(0.55);
+      if (entity.character) setCharacterColor(entity, c);
     }
     if (info && entity.label.textContent !== info.name) entity.label.textContent = info.name;
 
@@ -141,11 +278,7 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
     entity.group.rotation.y = state.yaw;
     entity.armPivot.rotation.x = -state.pitch;
 
-    const crouched = hasFlag(state.flags, FLAG.CROUCH);
-    const scaleY = crouched ? PLAYER_CROUCH_HEIGHT / PLAYER_HEIGHT : 1;
-    entity.group.scale.y += (scaleY - entity.group.scale.y) * 0.3;
-
-    // ---- leg swing, driven by how far they actually moved ----
+    // ---- how far they actually moved, which drives both animation paths ----
     const dx = state.pos[0] - entity.lastPos[0];
     const dz = state.pos[2] - entity.lastPos[2];
     const moved = Math.hypot(dx, dz);
@@ -153,13 +286,38 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
     entity.lastPos[1] = state.pos[1];
     entity.lastPos[2] = state.pos[2];
 
-    entity.stridePhase += moved * 3.2;
-    const swing = moved > 0.001 ? Math.sin(entity.stridePhase) * 0.5 : 0;
-    entity.legL.rotation.x = swing;
-    entity.legR.rotation.x = -swing;
+    const crouched = hasFlag(state.flags, FLAG.CROUCH);
+
+    if (entity.character) {
+      // The rig has a Duck clip, so squashing the whole figure — which is what the
+      // box version has to do — would be crouching twice.
+      entity.group.scale.y = 1;
+      showHeldWeapon(entity.character, state.weapon);
+      playClip(entity.character, clipFor({
+        dead: false,
+        airborne: hasFlag(state.flags, FLAG.AIRBORNE),
+        crouched,
+        // Snapshots arrive at 20Hz and are interpolated, so a threshold on
+        // distance moved is steadier than trusting a velocity we don't have.
+        moving: moved > 0.004,
+        sprinting: hasFlag(state.flags, FLAG.SPRINT),
+        firing: hasFlag(state.flags, FLAG.FIRING),
+      }));
+      entity.character.mixer.update(dt);
+    } else {
+      const scaleY = crouched ? PLAYER_CROUCH_HEIGHT / PLAYER_HEIGHT : 1;
+      entity.group.scale.y += (scaleY - entity.group.scale.y) * 0.3;
+
+      // ---- leg swing, driven by how far they actually moved ----
+      entity.stridePhase += moved * 3.2;
+      const swing = moved > 0.001 ? Math.sin(entity.stridePhase) * 0.5 : 0;
+      entity.legL.rotation.x = swing;
+      entity.legR.rotation.x = -swing;
+    }
 
     // ---- weapon model roughly matches what they're holding ----
-    if (state.weapon && entity.weaponId !== state.weapon) {
+    // Box figure only; the character shows the real gun from its own hand.
+    if (!entity.character && state.weapon && entity.weaponId !== state.weapon) {
       entity.weaponId = state.weapon;
       const w = getWeapon(state.weapon);
       const len = state.weapon === 'knife' ? 0.3 : state.weapon === 'pistol' ? 0.32 : 0.62;
@@ -238,11 +396,21 @@ function positionLabel(entity, camera, crouched, solids) {
 
 function destroyEntity(rp, entity) {
   rp.scene.remove(entity.group);
+
+  if (entity.character) {
+    entity.character.mixer.stopAllAction();
+    entity.character.mixer.uncacheRoot(entity.character.root);
+  }
+
   entity.group.traverse((o) => {
-    if (o.isMesh) o.geometry.dispose();
+    if (!o.isMesh && !o.isSkinnedMesh) return;
+    // Geometry is shared with the cached template on cloned characters, so only
+    // the materials — which instantiate() copied per player — are ours to free.
+    if (!entity.character || !entity.character.root.getObjectById(o.id)) o.geometry.dispose();
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) m?.dispose();
   });
+
   for (const m of entity.mats) m.dispose();
-  entity.weapon.material.dispose();
   entity.label.remove();
 }
 

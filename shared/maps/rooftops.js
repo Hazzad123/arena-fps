@@ -121,6 +121,8 @@ export default {
   ambientLight: 0.8,
   sunDirection: [-0.45, 0.8, 0.4],
   sunIntensity: 1.1,
+  // Pale blockwork on the stair housings and parapets.
+  wallTexture: 'blockwork',
   lethalFallY: FALL_Y,
   bounds: { min: [-40, FALL_Y - 5, -40], max: [40, 30, 40] },
   boxes: build(),

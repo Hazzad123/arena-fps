@@ -7,7 +7,7 @@
 //
 // Symmetric about z=0. Team A spawns south (-z), Team B north (+z).
 
-import { box, enclose, stairs, rack, crateStack, mirror, platform } from './helpers.js';
+import { box, enclose, stairs, rack, crateStack, mirror, platform, prop } from './helpers.js';
 
 const C = {
   floor: 0x8b8b93,
@@ -64,6 +64,28 @@ function build() {
   ];
   b.push(...midCrates);
 
+  // ---- yard clutter ----
+  // Real cover, not decoration: these are ordinary solid boxes that the client
+  // happens to draw as models. Authored at each model's own proportions so
+  // filling the box doesn't stretch it, placed on the south half and mirrored, so
+  // both teams get exactly the same fight.
+  const cover = [
+    prop(-22, 0, -9, 2.2, 2.1, 2.1, C.steel, 'Container_Small'),
+    prop(22, 0, -13, 2.44, 2.0, 1.3, C.steel, 'TrashContainer'),
+    // Pipe runs against the side walls, under the catwalk decks.
+    prop(-28.2, 0, -6, 0.96, 4.2, 1.0, C.steel, 'Pipes'),
+    prop(28.2, 0, -18, 0.96, 4.2, 1.0, C.steel, 'Pipes'),
+    // Low cover you can shoot over but not walk through. Clear of the rack legs
+    // at x=-10 and of the free-for-all spawn at [-6, 0, 14], which its mirror
+    // sat directly on top of until the map tests said so.
+    prop(-14, 0, -12, 3.35, 1.28, 0.92, C.crateB, 'SackTrench'),
+    prop(5.5, 0, -17, 1.0, 1.66, 1.0, C.steel, 'GasTank'),
+    prop(-15.5, 0, -18.5, 0.78, 1.02, 0.78, C.crateA, 'ExplodingBarrel'),
+    prop(-16.7, 0, -19.3, 0.78, 1.02, 0.78, C.crateA, 'ExplodingBarrel'),
+    prop(15.5, 0, -8, 0.78, 1.02, 0.78, C.crateA, 'ExplodingBarrel'),
+  ];
+  b.push(...cover, ...mirror(cover, 'z'));
+
   // ---- catwalks up both side walls ----
   // The deck's underside is at 4.5 and its walkable surface at 4.9, so the
   // stairs have to climb to 4.9 — climbing to 4.5 puts you under the floor.
@@ -116,6 +138,8 @@ export default {
   ambientLight: 1.15,
   sunDirection: [0.25, 1, 0.15],
   sunIntensity: 0.9,
+  // Grey brickwork walls over a concrete floor.
+  wallTexture: 'brick',
   bounds: { min: [-HALF - 3, -12, -HALF - 3], max: [HALF + 3, CEILING + 3, HALF + 3] },
   boxes: build(),
   spawns: {

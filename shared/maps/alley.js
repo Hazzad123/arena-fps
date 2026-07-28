@@ -124,6 +124,9 @@ export default {
   ambientLight: 0.6,
   sunDirection: [0.5, 0.85, -0.3],
   sunIntensity: 0.85,
+  // Cobbled back-alley underfoot, old red brick either side.
+  groundTexture: 'cobbles',
+  wallTexture: 'redbrick',
   bounds: { min: [-HALF - 5, -12, -HALF - 5], max: [HALF + 5, WALL_H + 6, HALF + 5] },
   boxes: build(),
   spawns: {

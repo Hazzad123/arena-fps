@@ -3,3 +3,7 @@ dist
 *.log
 .DS_Store
 .env
+
+# Source asset packs (CC0, Quaternius). Huge and not needed to build — only the
+# curated subset in client/public/models is committed.
+Assets/
