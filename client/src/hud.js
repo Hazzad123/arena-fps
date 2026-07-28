@@ -16,6 +16,7 @@ export function initHud() {
     'weapon-name', 'ammo', 'ammo-mag', 'reload-hint', 'practice-stats',
     'pr-hits', 'pr-shots', 'pr-acc', 'pr-streak', 'respawn', 'respawn-by',
     'respawn-timer', 'scoreboard', 'scope', 'weapon-rack',
+    'results', 'rs-headline', 'rs-score', 'rs-table', 'rs-next', 'rs-regroup',
   ];
   for (const id of ids) el[id] = document.getElementById(id);
 }
@@ -236,6 +237,97 @@ export function showScoreboard(visible, data = null) {
     .join('');
 
   el.scoreboard.innerHTML = `<h2>${escapeHtml(title)}</h2><table><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+
+// -------------------------------------------------------------- end of match
+
+/**
+ * The results screen. Deliberately not the Tab scoreboard with a different title:
+ * mid-round you want a glance at who's winning, and at the end you want the
+ * result, where you placed, and what happens next.
+ */
+export function showResults(visible, data = null) {
+  el.results.classList.toggle('hidden', !visible);
+  if (!visible || !data) return;
+
+  const { result, resultText, mode, players, myId, teamScores } = data;
+  const teamMode = mode === 'tdm';
+
+  // ---- headline, in the winning team's colour ----
+  const headline = el['rs-headline'];
+  headline.textContent = resultText ?? 'Round over';
+  headline.className =
+    result?.winnerTeam === 'A' ? 'team-a' : result?.winnerTeam === 'B' ? 'team-b' : 'neutral';
+
+  // ---- final score ----
+  const rows = [...players].sort(
+    (a, b) => b.score - a.score || b.kills - a.kills || a.deaths - b.deaths,
+  );
+  const score = el['rs-score'];
+
+  if (teamMode) {
+    score.innerHTML =
+      `<span class="a">${teamScores?.A ?? 0}</span>` +
+      '<span class="dash">–</span>' +
+      `<span class="b">${teamScores?.B ?? 0}</span>`;
+  } else if (rows[0]) {
+    score.innerHTML =
+      `${rows[0].score}` +
+      `<span class="sub">${escapeHtml(rows[0].name)} · ${rows[0].kills} kills</span>`;
+  } else {
+    score.textContent = '';
+  }
+
+  // ---- table ----
+  const best = rows[0]?.score ?? 0;
+  const head =
+    '<tr><th></th><th>Player</th>' +
+    (teamMode ? '<th>Team</th>' : '') +
+    '<th class="num">Score</th><th class="num">K</th><th class="num">D</th><th class="num">K/D</th></tr>';
+
+  const body = rows
+    .map((p, i) => {
+      const mine = p.id === myId ? ' class="me"' : '';
+      const swatch = teamMode
+        ? `<span class="swatch" style="background:${p.team === 'A' ? 'var(--team-a)' : 'var(--team-b)'}"></span>`
+        : '';
+      // Top of the table, not "everyone tied on score" — the sort already breaks
+      // ties on kills then fewest deaths, so first place is a single player. And
+      // only when somebody actually scored.
+      const mvp = i === 0 && best > 0 ? '<span class="mvp">MVP</span>' : '';
+      const teamCell = teamMode ? `<td>${p.team ?? '–'}</td>` : '';
+      // Dividing by zero deaths isn't a ratio, it's a flawless round.
+      const ratio = p.deaths === 0 ? (p.kills === 0 ? '—' : '∞') : (p.kills / p.deaths).toFixed(2);
+      return (
+        `<tr${mine}><td class="place">${i + 1}</td>` +
+        `<td>${swatch}${escapeHtml(p.name)}${mvp}</td>${teamCell}` +
+        `<td class="num">${p.score}</td><td class="num">${p.kills}</td>` +
+        `<td class="num">${p.deaths}</td><td class="num">${ratio}</td></tr>`
+      );
+    })
+    .join('');
+
+  el['rs-table'].innerHTML = `<table><thead>${head}</thead><tbody>${body}</tbody></table>`;
+}
+
+/** Ticked every frame while the results are up, so it stays cheap to update. */
+export function updateResultsFooter({ nextMapName, msLeft, regrouping, askedByMe, returning }) {
+  const secs = Math.max(0, Math.ceil(msLeft / 1000));
+
+  el['rs-next'].innerHTML = returning
+    ? `Back to the lobby in <b>${secs}s</b>`
+    : `Next up <b>${escapeHtml(nextMapName ?? '—')}</b> in <b>${secs}s</b>`;
+
+  const regroup = el['rs-regroup'];
+  regroup.classList.toggle('asked', askedByMe);
+
+  if (regrouping > 0) {
+    regroup.innerHTML = askedByMe
+      ? `You asked to regroup — press <span class="key">L</span> to cancel`
+      : `${regrouping} ${regrouping === 1 ? 'player wants' : 'players want'} to regroup in the lobby`;
+  } else {
+    regroup.innerHTML = `Press <span class="key">L</span> to go back to the lobby instead`;
+  }
 }
 
 // Player names come from other people, so they never go into innerHTML raw.

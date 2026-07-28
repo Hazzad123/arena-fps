@@ -1032,6 +1032,175 @@ button.wide {
   margin-right: 0.5rem;
 }
 
+/* ============================ end of match ============================ */
+
+#results {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(94vw, 620px);
+  max-height: 92vh;
+  overflow-y: auto;
+  background: rgba(10, 12, 17, 0.94);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1.6rem 1.5rem 1.3rem;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.6);
+  text-align: center;
+}
+.rs-eyebrow {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: var(--muted);
+}
+#rs-headline {
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin-top: 0.25rem;
+  line-height: 1.15;
+}
+#rs-headline.team-a {
+  color: var(--team-a);
+}
+#rs-headline.team-b {
+  color: var(--team-b);
+}
+#rs-headline.neutral {
+  color: var(--accent);
+}
+#rs-score {
+  font-family: var(--mono);
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-top: 0.3rem;
+  letter-spacing: 0.05em;
+}
+#rs-score .a {
+  color: var(--team-a);
+}
+#rs-score .b {
+  color: var(--team-b);
+}
+#rs-score .dash {
+  color: var(--muted);
+  margin: 0 0.5rem;
+}
+#rs-score .sub {
+  display: block;
+  font-family: var(--font);
+  font-size: 0.8rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--muted);
+  margin-top: 0.15rem;
+}
+
+#rs-table {
+  margin-top: 1.2rem;
+  text-align: left;
+}
+#rs-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+#rs-table th {
+  text-align: left;
+  font-size: 0.66rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  padding-bottom: 0.45rem;
+  font-weight: 600;
+}
+#rs-table td {
+  padding: 0.4rem 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+#rs-table td.num,
+#rs-table th.num {
+  text-align: right;
+  font-family: var(--mono);
+  /* Right-aligned columns of digits need the gap on the left, or a single-digit
+     death count sits flush against the ratio beside it and reads as one number. */
+  padding-left: 1.1rem;
+  white-space: nowrap;
+}
+#rs-table th.num {
+  font-family: var(--font);
+}
+#rs-table td.place {
+  width: 2.5ch;
+  font-family: var(--mono);
+  color: var(--muted);
+  text-align: right;
+  padding-right: 0.6rem;
+}
+#rs-table tr.me td {
+  color: var(--accent);
+  font-weight: 700;
+}
+#rs-table tr.me td.place {
+  color: var(--accent);
+}
+#rs-table .swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 0.5rem;
+  vertical-align: 1px;
+}
+#rs-table .mvp {
+  display: inline-block;
+  margin-left: 0.45rem;
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  color: #17130a;
+  background: var(--accent);
+  border-radius: 3px;
+  padding: 0 0.28rem;
+  vertical-align: 1px;
+}
+#rs-table .cls {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+#rs-next {
+  margin-top: 1.2rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+#rs-next b {
+  color: var(--text);
+  font-family: var(--mono);
+}
+#rs-regroup {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  min-height: 1.2em;
+}
+#rs-regroup .key {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  border: 1px solid var(--line);
+  background: #0f1218;
+  border-radius: 4px;
+  padding: 0 0.3rem;
+  color: var(--text);
+}
+#rs-regroup.asked {
+  color: var(--accent);
+}
+
 /* ============================== pause ============================== */
 
 #pause {
@@ -1076,6 +1245,13 @@ button.wide {
 }
 .pause-section > .label {
   margin-bottom: 0.5rem;
+}
+#btn-to-lobby {
+  margin-top: 0.5rem;
+}
+#btn-to-lobby.asked {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 #btn-quit {
   margin-top: 1.1rem;

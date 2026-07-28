@@ -249,6 +249,10 @@ function handleMessage(session, ws, msg) {
       if (session.room && session.player) session.room.handleSetClass(session.player, msg);
       return;
 
+    case C2S.TO_LOBBY:
+      if (session.room && session.player) session.room.handleReturnToLobby(session.player, msg);
+      return;
+
     default:
       return;
   }

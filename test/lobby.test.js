@@ -14,6 +14,7 @@ import { PHASE, S2C, decode } from '../shared/protocol.js';
 import { MAX_PLAYERS, MIN_PLAYERS_TO_START, LOBBY_GRACE_MS } from '../shared/constants.js';
 import { ROOM_CAPACITY } from '../server/modes.js';
 import { CLASSES, CLASS_IDS, DEFAULT_CLASS, WEAPONS, loadoutForClass, GUNGAME_LADDER } from '../shared/weapons.js';
+import { nextMap } from '../shared/maps/index.js';
 
 /** A socket that just records what the server sent it. */
 function fakeSocket() {
@@ -367,6 +368,142 @@ test('the start clock is reported as a remaining duration, not an absolute time'
   room.handleReady(players[1], { ready: true });
   const { startsInMs } = room.lobbyState();
   assert.ok(startsInMs > 0 && startsInMs <= LOBBY_GRACE_MS, `unexpected ${startsInMs}ms`);
+});
+
+// ------------------------------------------------------- back to the lobby
+
+/** Fast-forward whatever phase the room is in. */
+function expirePhase(room) {
+  room.phaseEndsAt = Date.now() - 1;
+  room.tick();
+}
+
+function playARound(room, players) {
+  readyAll(room, players);
+  room.beginRound();
+  room.endRound({ reason: 'timeup', winnerTeam: 'A' });
+  assert.equal(room.phase, PHASE.SCOREBOARD);
+}
+
+test('by default a finished round rolls straight into the next one', (t) => {
+  const { room, players } = makeRoom(t, 3);
+  playARound(room, players);
+
+  const mapBefore = room.mapId;
+  expirePhase(room);
+  assert.equal(room.phase, PHASE.COUNTDOWN, 'nobody asked to stop, so keep playing');
+  assert.notEqual(room.mapId, mapBefore, 'and the map rotates');
+});
+
+test('one player asking to regroup sends the room back to the lobby', (t) => {
+  const { room, players } = makeRoom(t, 4);
+  playARound(room, players);
+
+  room.handleReturnToLobby(players[2], { on: true });
+  assert.deepEqual([...room.regroupRequests], [players[2].id]);
+
+  expirePhase(room);
+  assert.equal(room.phase, PHASE.LOBBY, 'one asker is enough to hold the room');
+  assert.equal(room.regroupRequests.size, 0, 'and the request does not persist');
+});
+
+test('a player can take their own request back', (t) => {
+  const { room, players } = makeRoom(t, 3);
+  playARound(room, players);
+
+  room.handleReturnToLobby(players[1], { on: true });
+  room.handleReturnToLobby(players[1], { on: false });
+  assert.equal(room.regroupRequests.size, 0);
+
+  expirePhase(room);
+  assert.equal(room.phase, PHASE.COUNTDOWN);
+});
+
+test('each player toggles only their own request', (t) => {
+  const { room, players } = makeRoom(t, 3);
+  playARound(room, players);
+
+  room.handleReturnToLobby(players[0], { on: true });
+  room.handleReturnToLobby(players[1], { on: true });
+  // Player 1 changing their mind must not cancel player 0's request.
+  room.handleReturnToLobby(players[1], { on: false });
+  assert.deepEqual([...room.regroupRequests], [players[0].id]);
+
+  expirePhase(room);
+  assert.equal(room.phase, PHASE.LOBBY);
+});
+
+test('someone who leaves stops holding the room in the lobby', (t) => {
+  const { room, players } = makeRoom(t, 4);
+  playARound(room, players);
+
+  room.handleReturnToLobby(players[3], { on: true });
+  room.removePlayer(players[3].id);
+  assert.equal(room.regroupRequests.size, 0, 'a departed player has no say');
+
+  expirePhase(room);
+  assert.equal(room.phase, PHASE.COUNTDOWN);
+});
+
+test('regroup requests are only accepted between rounds', (t) => {
+  const { room, players } = makeRoom(t, 2);
+
+  // In the lobby, before anything has started.
+  room.handleReturnToLobby(players[0], { on: true });
+  assert.equal(room.regroupRequests.size, 0);
+
+  readyAll(room, players);
+  room.beginRound();
+  room.handleReturnToLobby(players[0], { on: true });
+  assert.equal(room.regroupRequests.size, 0, 'you cannot end a live round this way');
+  assert.equal(room.phase, PHASE.LIVE);
+});
+
+test('starting a round clears any request left over from the last one', (t) => {
+  const { room, players } = makeRoom(t, 3);
+  playARound(room, players);
+  room.handleReturnToLobby(players[0], { on: true });
+
+  room.beginRound();
+  assert.equal(room.regroupRequests.size, 0);
+});
+
+test('the results payload carries what the end screen needs', (t) => {
+  const { room, players } = makeRoom(t, 3);
+  playARound(room, players);
+
+  const payload = room.phasePayload();
+  assert.equal(payload.phase, PHASE.SCOREBOARD);
+  assert.equal(payload.resultText, 'Team A wins');
+  assert.equal(payload.result.winnerTeam, 'A');
+  assert.equal(payload.mode, room.mode);
+  assert.equal(payload.nextMapId, nextMap(room.mapId), 'the screen names the next map');
+  assert.equal(payload.roster.length, 3);
+  assert.deepEqual(payload.regroup, []);
+
+  room.handleReturnToLobby(players[0], { on: true });
+  assert.deepEqual(room.phasePayload().regroup, [players[0].id]);
+});
+
+test('re-sending the phase mid-scoreboard does not extend it', (t) => {
+  const { room, players } = makeRoom(t, 3);
+  playARound(room, players);
+
+  const deadline = room.phaseEndsAt;
+  const first = room.phasePayload().msLeft;
+
+  room.handleReturnToLobby(players[0], { on: true });
+  assert.equal(room.phaseEndsAt, deadline, 'the countdown everyone is watching must not restart');
+  assert.ok(room.phasePayload().msLeft <= first);
+});
+
+test('the next map is only named on the results screen', (t) => {
+  const { room, players } = makeRoom(t, 2);
+  assert.equal(room.phasePayload().nextMapId, null, 'the lobby is not between rounds');
+
+  readyAll(room, players);
+  room.beginRound();
+  assert.equal(room.phasePayload().nextMapId, null, 'nor is a live round');
 });
 
 // ------------------------------------------------------------------- classes

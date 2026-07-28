@@ -41,6 +41,7 @@ To let people on your network join without deploying, give them
 | Reset practice targets | `T` |
 | Pause menu | `Esc` (again to resume) |
 | Change class | `1`–`6` while dead or paused |
+| Back to lobby | `L` on the results screen |
 
 **Modes.** Team Deathmatch (auto-balanced teams, friendly fire off),
 Free-for-all, and Gun Game (every kill promotes you up
@@ -64,6 +65,23 @@ can't be used as a free mid-fight re-arm. Gun Game ignores classes by design.
 **Pause menu.** `Esc` releases the mouse and opens it: resume, settings, class,
 and leave. In the practice range it also lists every weapon to click. It does
 **not** pause the match — you're still standing there, and it says so.
+
+**End of a round.** A results screen: who won, in their team's colour, the final
+score, and a table ranked by score with placing, kills, deaths and K/D, the top
+scorer marked MVP. It names the map you're about to play and counts down to it.
+
+Rounds roll straight into the next one by default. Anyone can press `L` (or use
+the pause menu) to go **back to the lobby** instead, which is where you'd change
+class, mode or map, or wait for someone. One person asking is enough to hold the
+room — it isn't a veto on playing, just a detour, and the lobby's normal start
+rules take over once you're there. You can take your own request back, and you
+can't cancel anyone else's.
+
+**Name tags** are occluded by the map. The figures are real meshes and depth-test
+themselves, but a name tag is a DOM element drawn over the whole scene, so
+without a line-of-sight check every tag reads straight through walls — a free
+wallhack. Teammates are occluded too: friendly fire is off, so knowing exactly
+where a teammate is standing behind a wall is information nobody needs.
 
 **Weapons.** Eight: knife, sidearm, SMG, shotgun, assault rifle, sniper, support
 LMG, and a marksman rifle. The practice range gives you all of them — keys `1`–`8`,
@@ -116,7 +134,7 @@ but wants the `flyctl` CLI installed.
 npm test
 ```
 
-104 tests, no browser needed. They cover the parts where a bug is silent rather
+114 tests, no browser needed. They cover the parts where a bug is silent rather
 than loud:
 
 - **`shared/collision.js`** — swept AABB movement, ray/box and ray/cylinder
@@ -130,10 +148,12 @@ than loud:
   placed above the 1.28m jump height, a staircase that ran underneath the
   balcony it led to, and catwalk stairs that stopped at the underside of their
   own deck.
-- **Lobby and class rules** (`test/lobby.test.js`) — capacity, host promotion, the
-  start rules and every way they could deadlock, and that a class change while
-  alive waits for your next spawn. Ways a lobby fails to start are invisible until
-  eight people are stood around waiting, which is the worst time to find out.
+- **Lobby, class and round-end rules** (`test/lobby.test.js`) — capacity, host
+  promotion, the start rules and every way they could deadlock, that a class
+  change while alive waits for your next spawn, and that a regroup request routes
+  the room to the lobby without letting one player cancel another's. Ways a lobby
+  fails to start are invisible until eight people are stood around waiting, which
+  is the worst time to find out.
 
 ### Filling a lobby without any people
 

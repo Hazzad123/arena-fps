@@ -50,6 +50,10 @@ export class Room {
     this.hostId = null;
     this.graceEndsAt = 0;
 
+    // Players who asked, from the results screen, to regroup in the lobby rather
+    // than roll straight into the next round.
+    this.regroupRequests = new Set();
+
     this.timer = setInterval(() => this.tick(), TICK_MS);
     // Don't hold the process open on an idle room.
     this.timer.unref?.();
@@ -131,6 +135,8 @@ export class Room {
     const player = this.players.get(id);
     if (!player) return;
     this.players.delete(id);
+    // Someone who has left shouldn't still be holding the room in the lobby.
+    this.regroupRequests.delete(id);
 
     if (this.players.size === 0) {
       this.emptySince = Date.now();
@@ -238,19 +244,33 @@ export class Room {
 
   // -------------------------------------------------------------------- phases
 
-  setPhase(phase, durationMs) {
-    this.phase = phase;
-    this.phaseEndsAt = durationMs > 0 ? Date.now() + durationMs : 0;
-
-    this.broadcast(S2C.PHASE, {
-      phase,
-      msLeft: durationMs,
+  /**
+   * Everything a client needs to render the current phase.
+   *
+   * Built on demand rather than captured at transition time so it can be re-sent
+   * mid-phase — a regroup request has to reach everyone without restarting the
+   * countdown they're all watching, hence msLeft being derived from the deadline.
+   */
+  phasePayload() {
+    return {
+      phase: this.phase,
+      msLeft: this.phaseEndsAt > 0 ? Math.max(0, this.phaseEndsAt - Date.now()) : 0,
       mapId: this.mapId,
+      // The results screen names the map you're about to play.
+      nextMapId: this.phase === PHASE.SCOREBOARD ? nextMap(this.mapId) : null,
       teamScores: this.teamScores,
       roster: this.roster(),
       result: this.lastResult,
       resultText: this.lastResult ? modes.describeResult(this, this.lastResult) : null,
-    });
+      regroup: [...this.regroupRequests],
+      mode: this.mode,
+    };
+  }
+
+  setPhase(phase, durationMs) {
+    this.phase = phase;
+    this.phaseEndsAt = durationMs > 0 ? Date.now() + durationMs : 0;
+    this.broadcast(S2C.PHASE, this.phasePayload());
   }
 
   // ------------------------------------------------------------------- lobby
@@ -356,6 +376,7 @@ export class Room {
   beginRound() {
     modes.resetScores(this);
     this.graceEndsAt = 0;
+    this.regroupRequests.clear();
     for (const p of this.players.values()) {
       // Readiness is per-match. If the room drops back to the lobby later,
       // everyone opts in again rather than inheriting a yes from an hour ago.
@@ -369,8 +390,29 @@ export class Room {
 
   endRound(result) {
     this.lastResult = result;
+    this.regroupRequests.clear();
     for (const p of this.players.values()) p.alive = false;
     this.setPhase(PHASE.SCOREBOARD, DURATION.scoreboard);
+  }
+
+  /**
+   * "Back to lobby" from the results screen.
+   *
+   * Any player can ask, and one asker is enough to hold the room — it isn't a
+   * veto on playing, just a detour through the lobby, where the normal start
+   * rules take over and the host can change the mode or map. Each player toggles
+   * only their own request, so nobody can cancel somebody else's.
+   */
+  handleReturnToLobby(player, msg) {
+    if (this.phase !== PHASE.SCOREBOARD) return;
+
+    const want = msg?.on !== false;
+    if (want === this.regroupRequests.has(player.id)) return;
+
+    if (want) this.regroupRequests.add(player.id);
+    else this.regroupRequests.delete(player.id);
+
+    this.broadcast(S2C.PHASE, this.phasePayload());
   }
 
   rotateMap() {
@@ -657,12 +699,16 @@ export class Room {
 
       case PHASE.SCOREBOARD:
         if (now >= this.phaseEndsAt) {
+          const regroup = this.regroupRequests.size > 0;
+          this.regroupRequests.clear();
           this.rotateMap();
-          if (this.players.size >= MIN_PLAYERS_TO_START) {
+
+          if (!regroup && this.players.size >= MIN_PLAYERS_TO_START) {
             this.lastResult = null;
             this.setPhase(PHASE.COUNTDOWN, DURATION.countdown);
           } else {
-            // Not enough people for another round: back to the lobby to wait.
+            // Somebody asked to regroup, or there aren't enough people for
+            // another round. Either way: back to the lobby to sort it out.
             this.setPhase(PHASE.LOBBY, 0);
             this.broadcastLobby();
           }
