@@ -582,6 +582,82 @@ export function spawnImpact(impacts, point, now, color = 0xffd9a0, isFlesh = fal
   slot.mesh.visible = true;
 }
 
+// ---------------------------------------------------------------------------
+// Explosions
+//
+// A fireball plus a light flash. Pooled like everything else, because a chain of
+// barrels going off produces several at once.
+// ---------------------------------------------------------------------------
+
+const EXPLOSION_COUNT = 6;
+const EXPLOSION_MS = 620;
+
+export function createExplosions(scene) {
+  const geo = new THREE.SphereGeometry(1, 14, 10);
+  const pool = [];
+  for (let i = 0; i < EXPLOSION_COUNT; i++) {
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xffa23c,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.visible = false;
+    mesh.frustumCulled = false;
+    scene.add(mesh);
+
+    // A real light makes the blast wash over the surrounding geometry, which is
+    // most of what sells it.
+    const light = new THREE.PointLight(0xffa040, 0, 16, 2);
+    light.visible = false;
+    scene.add(light);
+
+    pool.push({ mesh, mat, light, until: 0, radius: 1 });
+  }
+  return { pool, next: 0 };
+}
+
+export function spawnExplosion(explosions, at, radius, now) {
+  const slot = explosions.pool[explosions.next];
+  explosions.next = (explosions.next + 1) % explosions.pool.length;
+
+  slot.radius = radius;
+  slot.mesh.position.set(at[0], at[1], at[2]);
+  slot.mesh.scale.setScalar(radius * 0.2);
+  slot.mat.opacity = 0.95;
+  slot.mat.color.setHex(0xfff0b0);
+  slot.mesh.visible = true;
+
+  slot.light.position.set(at[0], at[1] + 0.4, at[2]);
+  slot.light.distance = radius * 3;
+  slot.light.intensity = 26;
+  slot.light.visible = true;
+
+  slot.until = now + EXPLOSION_MS;
+}
+
+export function updateExplosions(explosions, now) {
+  for (const slot of explosions.pool) {
+    if (!slot.mesh.visible) continue;
+    const remaining = slot.until - now;
+    if (remaining <= 0) {
+      slot.mesh.visible = false;
+      slot.light.visible = false;
+      slot.light.intensity = 0;
+      continue;
+    }
+    // t runs 0 -> 1 over the life of the blast.
+    const t = 1 - remaining / EXPLOSION_MS;
+    // Expands fast then holds, and cools from white through orange to red.
+    slot.mesh.scale.setScalar(slot.radius * (0.2 + Math.sqrt(t) * 0.95));
+    slot.mat.opacity = 0.95 * (1 - t) ** 1.6;
+    slot.mat.color.setRGB(1, Math.max(0.15, 0.94 - t * 1.1), Math.max(0.05, 0.69 - t * 1.5));
+    slot.light.intensity = 26 * (1 - t) ** 2;
+  }
+}
+
 export function updateImpacts(impacts, now) {
   for (const slot of impacts.pool) {
     if (!slot.mesh.visible) continue;

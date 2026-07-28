@@ -19,6 +19,24 @@ export const PLAYER_RADIUS = 0.4;
 export const EYE_OFFSET = 0.15; // below the top of the head
 export const MAX_HEALTH = 100;
 
+// Hitboxes are deliberately wider than the collision radius. Two different jobs:
+// PLAYER_RADIUS decides where you can walk, these decide whether a shot connects.
+// Being a little generous matters because you are shooting at a remote player
+// rendered ~100ms in the past (see net.js) — the shooter shouldn't be punished for
+// latency they can't see or correct for. Widening the hitbox is the cheap version
+// of lag compensation.
+export const HITBOX_RADIUS = 0.54; // vs PLAYER_RADIUS 0.4
+export const HITBOX_HEAD_PAD = 0.12; // a little air above the crown still counts
+
+// ------------------------------------------------------------ explosive barrels
+// Counted in *shots*, not damage, so a barrel takes the same two hits whether
+// you're holding a pistol or an LMG — and so one shotgun blast isn't eight hits.
+export const BARREL_HITS = 2;
+export const BARREL_DAMAGE = 95; // at the centre; falls off linearly to 0
+export const BARREL_RADIUS = 5.5;
+export const BARREL_CHAIN_RADIUS = 6.5; // a blast sets off its neighbours
+export const BARREL_CHAIN_LIMIT = 5; // guards against a pathological chain
+
 // Movement. Faster than real life on purpose — this is an arena shooter.
 export const WALK_SPEED = 6.2;
 export const SPRINT_SPEED = 9.0;

@@ -61,13 +61,12 @@ function findJoinableRoom() {
 // Sweep out rooms that have been empty a while.
 const sweeper = setInterval(() => {
   const now = Date.now();
-  for (const [code, room] of rooms) {
-    if (room.isExpired(now)) {
-      room.dispose();
-      rooms.delete(code);
-    }
+  for (const room of [...rooms.values()]) {
+    // Backstop only: leaveRoom closes rooms the moment they empty. This catches
+    // anything that emptied without going through it.
+    if (room.isExpired(now)) closeRoom(room, 'swept');
   }
-}, Math.max(10_000, EMPTY_ROOM_TTL_MS / 4));
+}, 15_000);
 sweeper.unref?.();
 
 // ------------------------------------------------------------------------- http
@@ -273,10 +272,17 @@ function leaveRoom(session) {
   session.room = null;
   session.player = null;
 
-  if (room.size === 0 && room.isExpired(Date.now())) {
-    room.dispose();
-    rooms.delete(room.code);
-  }
+  // The room dies with its last player. Nothing is kept warm for a rejoin: the
+  // code is gone, the 20Hz tick stops, and the memory is released. Quick Play
+  // makes a fresh room in a millisecond, so there's nothing to preserve.
+  if (room.size === 0) closeRoom(room, 'empty');
+}
+
+function closeRoom(room, reason) {
+  if (!rooms.has(room.code)) return;
+  room.dispose();
+  rooms.delete(room.code);
+  console.log(`room ${room.code} closed (${reason}); ${rooms.size} remaining`);
 }
 
 // ------------------------------------------------------------------- lifecycle
