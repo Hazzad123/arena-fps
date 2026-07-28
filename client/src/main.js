@@ -1217,6 +1217,8 @@ function step(dt, now) {
         camera,
         // Name tags are DOM, so they need the map to know what's hiding a player.
         solids: app.map.solids,
+        // Drives the character animation mixers.
+        dt,
       });
     }
     updateMatchHud(now);

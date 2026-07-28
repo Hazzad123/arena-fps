@@ -102,6 +102,32 @@ shotgun country). Maps rotate between rounds.
 people read them out loud. Sharing `https://<host>/#ABCD` *is* the invite — the
 code fills itself in. "Quick play" drops you into any room with space.
 
+## Art assets
+
+The game runs entirely on box primitives and still does if nothing below loads —
+models and textures are fetched at runtime from `client/public`, and every caller
+keeps its procedural version as the fallback. A 404 costs you the nice guns, not
+the match.
+
+| What | Where it's used | Source |
+|---|---|---|
+| 8 gun models | first-person viewmodels, and in remote players' hands | Toon Shooter Game Kit (Quaternius) |
+| `Character_Soldier` | remote players, with the kit's own animation clips | Toon Shooter Game Kit (Quaternius) |
+| 16 environment props | crates and solid cover in the maps, plus wall dressing | Toon Shooter Game Kit (Quaternius) |
+| 5 surface textures | floors and walls, tiled by world size | 50 Free Stylized Wall Textures |
+
+The Quaternius kit is **CC0** (public domain) — its `License.txt` says so
+explicitly. Shipped assets total ~4.5MB, none of it in the JS bundle.
+
+> **The wall-texture pack shipped without a licence file.** Four of the five
+> textures in `client/public/textures` derive from it. That's worth resolving
+> before this goes anywhere public — either confirm the terms or swap those four
+> for something with a licence attached. The models and the game code are
+> unaffected.
+
+Source packs live in `Assets/`, which is gitignored: only the small curated subset
+under `client/public` is committed.
+
 ## Deploying
 
 **See [DEPLOY.md](DEPLOY.md) for the step-by-step.** Short version: push to

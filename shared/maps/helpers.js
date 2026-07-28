@@ -15,6 +15,18 @@ export function box(x, y, z, w, h, d, color, tag) {
 }
 
 /**
+ * Solid cover that the client draws as a model.
+ *
+ * It's an ordinary box in every way that matters: the server collides with it,
+ * the navigation tests route around it, and if the model never downloads you get
+ * a plainly-coloured box of exactly the same size. `file` names a glTF in
+ * client/public/models/props.
+ */
+export function prop(x, y, z, w, h, d, color, file) {
+  return box(x, y, z, w, h, d, color, `prop:${file}`);
+}
+
+/**
  * A staircase built from solid blocks.
  *
  * We have no sloped surfaces — the world is axis-aligned boxes only — so ramps
@@ -68,7 +80,10 @@ export function crateStack({ x, y = 0, z, size = 1.6, height = 2, color, seed = 
     const s = size * (1 - i * 0.08);
     const jx = (next() - 0.5) * size * 0.25;
     const jz = (next() - 0.5) * size * 0.25;
-    out.push(box(x + jx, y + i * size, z + jz, s, size, s, color));
+    // Tagged so the renderer can draw a crate model in this box's place. The box
+    // is still the box — collision, the server's copy of it and the navigation
+    // tests all see exactly what they saw before, only the picture changes.
+    out.push(box(x + jx, y + i * size, z + jz, s, size, s, color, 'crate'));
   }
   return out;
 }
