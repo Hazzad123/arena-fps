@@ -182,7 +182,7 @@ function handleMessage(session, ws, msg) {
         ws.send(encode(S2C.ERROR, { code: 'no-capacity', message: 'Server is full — try again shortly.' }));
         return;
       }
-      joinRoom(session, ws, room);
+      joinRoom(session, ws, room, msg.classId);
       return;
     }
 
@@ -202,7 +202,7 @@ function handleMessage(session, ws, msg) {
         return;
       }
       leaveRoom(session);
-      joinRoom(session, ws, room);
+      joinRoom(session, ws, room, msg.classId);
       return;
     }
 
@@ -213,7 +213,7 @@ function handleMessage(session, ws, msg) {
         ws.send(encode(S2C.ERROR, { code: 'no-capacity', message: 'Server is full — try again shortly.' }));
         return;
       }
-      joinRoom(session, ws, room);
+      joinRoom(session, ws, room, msg.classId);
       return;
     }
 
@@ -233,15 +233,33 @@ function handleMessage(session, ws, msg) {
       if (session.room && session.player) session.room.handleSwitch(session.player, msg);
       return;
 
+    case C2S.READY:
+      if (session.room && session.player) session.room.handleReady(session.player, msg);
+      return;
+
+    case C2S.START:
+      if (session.room && session.player) session.room.handleStart(session.player);
+      return;
+
+    case C2S.LOBBY_SET:
+      if (session.room && session.player) session.room.handleLobbySet(session.player, msg);
+      return;
+
+    case C2S.SETCLASS:
+      if (session.room && session.player) session.room.handleSetClass(session.player, msg);
+      return;
+
     default:
       return;
   }
 }
 
-function joinRoom(session, ws, room) {
+function joinRoom(session, ws, room, classId) {
   session.room = room;
   session.name ??= sanitiseName(null);
-  session.player = room.addPlayer({ id: session.id, name: session.name, ws });
+  // The class arrives with the join because joining a live match spawns you on
+  // the spot — a separate message afterwards would always be one life too late.
+  session.player = room.addPlayer({ id: session.id, name: session.name, ws, classId });
 }
 
 function leaveRoom(session) {

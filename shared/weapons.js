@@ -215,8 +215,67 @@ export const WEAPONS = {
  */
 export const GUNGAME_LADDER = ['pistol', 'smg', 'shotgun', 'rifle', 'sniper', 'knife'];
 
-/** What you spawn with in TDM and FFA. */
-export const DEFAULT_LOADOUT = { primary: 'rifle', secondary: 'pistol', melee: 'knife' };
+/**
+ * Classes: a primary, and the sidearm and knife everyone gets.
+ *
+ * The primary is the whole decision. Giving each class a different pistol or a
+ * different knife would be six more numbers to tune and nobody would feel any of
+ * them, whereas the primary changes the range you want to fight at, which is the
+ * only thing a class in an arena shooter needs to do.
+ *
+ * Ordered by the number key that selects them.
+ */
+export const CLASSES = {
+  assault: {
+    id: 'assault',
+    name: 'Assault',
+    blurb: 'The all-rounder. Good everywhere, best nowhere.',
+    primary: 'rifle',
+  },
+  scout: {
+    id: 'scout',
+    name: 'Scout',
+    blurb: 'Fastest gun in the game. Punishes loose aim.',
+    primary: 'smg',
+  },
+  breacher: {
+    id: 'breacher',
+    name: 'Breacher',
+    blurb: 'One shot inside 7m. Nothing at all past 20m.',
+    primary: 'shotgun',
+  },
+  marksman: {
+    id: 'marksman',
+    name: 'Marksman',
+    blurb: 'Two body shots, or one to the head.',
+    primary: 'dmr',
+  },
+  recon: {
+    id: 'recon',
+    name: 'Recon',
+    blurb: 'One shot anywhere, if you can hold an angle.',
+    primary: 'sniper',
+  },
+  support: {
+    id: 'support',
+    name: 'Support',
+    blurb: '75 rounds without reloading. Slow to carry.',
+    primary: 'lmg',
+  },
+};
+
+export const CLASS_IDS = Object.keys(CLASSES);
+export const DEFAULT_CLASS = 'assault';
+
+/** Unknown ids fall back rather than throwing — this arrives over the wire. */
+export function getClass(id) {
+  return CLASSES[id] ?? CLASSES[DEFAULT_CLASS];
+}
+
+/** The three weapons a class spawns holding, primary first. */
+export function loadoutForClass(id) {
+  return [getClass(id).primary, 'pistol', 'knife'];
+}
 
 /** Everything the practice range unlocks, in number-key order. */
 export const ALL_WEAPON_IDS = Object.keys(WEAPONS).sort((a, b) => WEAPONS[a].slot - WEAPONS[b].slot);

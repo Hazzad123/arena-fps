@@ -3,7 +3,7 @@
 // Everything mode-specific lives here so room.js stays a plain state machine.
 
 import { TEAMS, SCORE_LIMIT, MAX_PLAYERS } from '../shared/constants.js';
-import { GUNGAME_LADDER, DEFAULT_LOADOUT } from '../shared/weapons.js';
+import { GUNGAME_LADDER, loadoutForClass } from '../shared/weapons.js';
 
 export function isTeamMode(mode) {
   return mode === 'tdm';
@@ -56,10 +56,16 @@ export function rebalance(room) {
 export function loadoutFor(room, player) {
   if (room.mode === 'gungame') {
     const id = GUNGAME_LADDER[Math.min(player.ladderIndex, GUNGAME_LADDER.length - 1)];
-    // Only the current rung — that's the whole point of the mode.
+    // Only the current rung — that's the whole point of the mode, and it's why
+    // Gun Game ignores your class.
     return [id];
   }
-  return [DEFAULT_LOADOUT.primary, DEFAULT_LOADOUT.secondary, DEFAULT_LOADOUT.melee];
+  return loadoutForClass(player.classId);
+}
+
+/** Does the player's own class choice decide their loadout in this mode? */
+export function usesClasses(mode) {
+  return mode !== 'gungame';
 }
 
 export function spawnPointsFor(room, map, player) {
