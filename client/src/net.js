@@ -140,6 +140,12 @@ function ingestSnapshot(net, msg) {
 
   net.buffer.push(snap);
   if (net.buffer.length > BUFFER_LIMIT) net.buffer.shift();
+
+  // Interpolation intentionally renders everyone 100ms in the past, but our own
+  // health is UI state and should use the newest authoritative value. Without
+  // this, server-side regeneration never reached the local health bar.
+  const self = snap.players.find((player) => player.id === net.myId);
+  if (self) emit(net, 'selfstate', self);
 }
 
 /** Server time we should be rendering right now. */

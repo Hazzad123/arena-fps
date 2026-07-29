@@ -153,6 +153,19 @@ const ADS = new THREE.Vector3(0.0, -0.175, -0.46);
 const VIEW_SCALE = 0.8;
 // Shrink a little while aimed, so it intrudes even less.
 const ADS_SCALE = 0.72;
+// The source models have very different silhouettes even when their authored
+// lengths are similar. These are deliberately small corrections after the
+// automatic bounds fit, not hand-authored replacement scales for every gun.
+// They keep the obvious outliers in the same visual weight class while
+// preserving the fact that, say, a sawn-off is stubbier than a pump shotgun.
+const WEAPON_VIEW_SCALE = {
+  bullpup: 0.55,
+  sawnoff: 0.72,
+  autoshotgun: 0.9,
+  dmr: 1.15,
+  smg_heavy: 1.25,
+  revolver: 1.35,
+};
 // A few degrees of yaw shows the gun in three-quarter view instead of flat
 // side-on, which reads much better. Purely cosmetic — shots follow the camera.
 const BASE_YAW = -0.07;
@@ -179,6 +192,10 @@ export function createWeaponView() {
 
   // Fixed studio lighting so the gun reads clearly on every map.
   scene.add(new THREE.HemisphereLight(0xffffff, 0x555560, 1.0));
+  // Flat dark MTL colours need a little frontal fill. Without it, faces turned
+  // away from the key light collapse to black even though their material colour
+  // loaded correctly.
+  scene.add(new THREE.AmbientLight(0xffffff, 0.45));
   const key = new THREE.DirectionalLight(0xffffff, 1.5);
   key.position.set(-0.6, 1, 0.75);
   scene.add(key);
@@ -187,7 +204,6 @@ export function createWeaponView() {
   scene.add(rim);
 
   const root = new THREE.Group();
-  root.scale.setScalar(VIEW_SCALE);
   scene.add(root);
 
   const models = {};
@@ -479,7 +495,13 @@ export function updateWeaponView(view, dt, now, player, lookDelta) {
   pos.y += view.sway.y * (1 - t * 0.75);
   pos.y -= reload.drop;
 
-  view.root.scale.setScalar(VIEW_SCALE + (ADS_SCALE - VIEW_SCALE) * t);
+  // Scale the weapon around its own pivot. Scaling `view.root` also scales HIP
+  // and ADS — the gun and its distance from the camera change together, leaving
+  // its apparent size almost identical. That made VIEW_SCALE a misleading no-op
+  // and is why several detailed models filled far more of the screen than their
+  // fallback shapes suggested.
+  const modelScale = WEAPON_VIEW_SCALE[view.currentId] ?? 1;
+  m.group.scale.setScalar((VIEW_SCALE + (ADS_SCALE - VIEW_SCALE) * t) * modelScale);
 
   // Walking bob, damped hard when aiming.
   const speed = Math.hypot(player.vel[0], player.vel[2]);

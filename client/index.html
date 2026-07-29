@@ -51,6 +51,7 @@
         <div id="score-b" class="team-score">0</div>
       </div>
       <div id="hud-state"></div>
+      <div id="emote-toast" class="hidden"></div>
 
       <div id="killfeed"></div>
 
@@ -227,6 +228,21 @@
 
         <button id="btn-resume" class="primary wide">Resume</button>
         <button id="btn-to-lobby" class="ghost wide hidden">Back to lobby</button>
+
+        <details id="pause-controls" class="pause-section" open>
+          <summary>Controls</summary>
+          <div class="controls-grid">
+            <span>Move</span><kbd>W A S D</kbd>
+            <span>Look / fire / aim</span><kbd>Mouse / LMB / RMB</kbd>
+            <span>Jump / sprint / crouch</span><kbd>Space / Shift / Ctrl or C</kbd>
+            <span>Reload / use</span><kbd>R / E</kbd>
+            <span>Switch weapon</span><kbd>1–8</kbd>
+            <span>Scoreboard / chat</span><kbd>Tab / Enter</kbd>
+            <span>Wave / yes / no</span><kbd>Z / X / V</kbd>
+            <span>Pause</span><kbd>Esc</kbd>
+          </div>
+          <p class="controls-note">Shift + Enter opens team chat. T resets the practice range; L returns to the lobby after a round.</p>
+        </details>
 
         <div id="pause-class" class="pause-section hidden">
           <div class="label">Gun — applies on your next spawn</div>

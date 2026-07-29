@@ -7,7 +7,7 @@
 import * as THREE from 'three';
 import {
   PHYSICS_DT, MIN_FOV, MAX_FOV, TEAMS, RESPAWN_DELAY_MS, MAX_PLAYERS, BARREL_RADIUS,
-  BR_LOOT_RADIUS,
+  BR_LOOT_RADIUS, EMOTE_COOLDOWN_MS, PITCH_LIMIT,
 } from '@shared/constants.js';
 import { getMap, mapList } from '@shared/maps/index.js';
 import {
@@ -18,7 +18,10 @@ import { raycastBoxes, raycastPlayers } from '@shared/collision.js';
 import { C2S, S2C, PHASE, FLAG, MODE_NAMES } from '@shared/protocol.js';
 
 import { settings, saveSettings, ensureNickname } from './settings.js';
-import { initInput, input, requestLock, exitLock, onLockChange, consumePressed, consumeLook } from './input.js';
+import {
+  initInput, input, requestLock, exitLock, onLockChange,
+  consumePressed, consumeLook, clearPressed,
+} from './input.js';
 import {
   createRenderer, createCamera, createWorld, loadMap, unloadMap, scorchBarrel,
 } from './mapRenderer.js';
@@ -38,7 +41,9 @@ import {
   createRange, updateRange, raycastTargets, registerHit, registerShot, resetRange, disposeRange,
 } from './practice.js';
 import * as net from './net.js';
-import { createRemotePlayers, syncRemotePlayers, clearRemotePlayers, hitboxesFrom } from './remotePlayers.js';
+import {
+  createRemotePlayers, syncRemotePlayers, clearRemotePlayers, hitboxesFrom, playRemoteEmote,
+} from './remotePlayers.js';
 import * as audio from './audio.js';
 import { createMinimap, drawMinimap, noteGunfire, clearMinimap } from './minimap.js';
 import {
@@ -134,6 +139,7 @@ const app = {
   lobbyNotice: '',
   lobbyNoticeTimer: null,
   lockCheckTimer: null,
+  lastEmoteAt: -Infinity,
   // Our own class. The server holds the authoritative copy; this is what the
   // pickers highlight, and it survives across sessions via settings.
   myGun: getPrimary(settings.primaryId),
@@ -345,6 +351,7 @@ function enterLobby() {
   hud.showResults(false);
   // A round can end while the pause menu is open; the lobby has its own buttons.
   showPause(false);
+  clearPressed();
   renderLobby();
 }
 
@@ -355,7 +362,8 @@ function enterMatch() {
   hud.showHud(true);
   hud.setPracticeMode(false);
   hud.setMinimapVisible(true);
-  hud.setTeamScoresVisible(app.match.mode === 'tdm');
+  syncModeUi();
+  clearPressed();
   grabPointer();
 }
 
@@ -385,6 +393,7 @@ function leaveToMenu() {
   hud.showResults(false);
   hud.clearKillfeed();
   clearChat(chat);
+  clearPressed();
   showPause(false);
   dom.lobby.classList.add('hidden');
   dom.menu.classList.remove('hidden');
@@ -692,8 +701,12 @@ function renderLobby() {
 
   // Host controls. Everyone else just sees the mode and map in the header.
   dom['lobby-host'].classList.toggle('hidden', !iAmHost());
-  dom['lobby-mode-select'].value = m.mode;
-  dom['lobby-map-select'].value = app.map?.id ?? '';
+  const modeSelect = dom['lobby-mode-select'];
+  const mapSelect = dom['lobby-map-select'];
+  const fixedMap = m.mode === 'br';
+  modeSelect.value = m.mode;
+  mapSelect.value = app.map?.id ?? '';
+  mapSelect.classList.toggle('hidden', fixedMap);
 
   // Everything below is only actionable once the room is actually in the lobby;
   // between rounds you're just waiting to be dropped into the next one.
@@ -701,9 +714,8 @@ function renderLobby() {
   dom['btn-start'].classList.toggle('hidden', !iAmHost());
   dom['btn-start'].disabled = !inLobbyPhase || players.length < (m.lobby.minPlayers || 2);
   dom['btn-ready'].disabled = !inLobbyPhase;
-  for (const select of [dom['lobby-mode-select'], dom['lobby-map-select']]) {
-    select.disabled = !inLobbyPhase;
-  }
+  modeSelect.disabled = !inLobbyPhase;
+  mapSelect.disabled = !inLobbyPhase || fixedMap;
 
   dom['lobby-class'].classList.toggle('hidden', !gunChoiceMatters(m.mode));
   refreshGunPickers();
@@ -829,16 +841,13 @@ net.on(connection, S2C.JOINED, (msg) => {
   setViewWeapon(weaponView, player.inventory[0]);
 
   history.replaceState(null, '', `#${msg.code}`);
-  hud.setTeamScoresVisible(m.mode === 'tdm');
-  setTeamChatAvailable(chat, m.mode === 'tdm');
-  hud.setBattleRoyaleVisible(m.mode === 'br');
+  syncModeUi();
   hud.updateScores(m.teamScores.A, m.teamScores.B);
 
   for (const index of msg.barrelsGone ?? []) scorchBarrel(world, index);
   syncPickups(pickups, msg.pickupsTaken);
   if (msg.loot) setLoot(royale, msg.loot);
   if (msg.zone) setZone(royale, msg.zone);
-  hud.setBattleRoyaleVisible(m.mode === 'br');
 
   if (msg.phase === PHASE.LIVE || msg.phase === PHASE.COUNTDOWN) enterMatch();
   else enterLobby();
@@ -862,6 +871,7 @@ function applyLobbyState(msg) {
   m.lobby.startsAt = msg.startsInMs > 0 ? performance.now() + msg.startsInMs : 0;
   if (msg.roster) updateRoster(msg.roster);
   if (msg.mapId && msg.mapId !== app.map?.id) applyMap(msg.mapId);
+  syncModeUi();
 }
 
 net.on(connection, S2C.LOBBY, (msg) => {
@@ -882,6 +892,7 @@ net.on(connection, S2C.PHASE, (msg) => {
   m.regroup = msg.regroup ?? [];
   m.mode = msg.mode ?? m.mode;
   if (msg.roster) updateRoster(msg.roster);
+  syncModeUi();
 
   // A regroup request re-sends the scoreboard phase to everyone. Redraw the
   // footer rather than the whole panel, so it doesn't flicker mid-read.
@@ -941,6 +952,12 @@ net.on(connection, S2C.RESPAWN, (msg) => {
   hud.showRespawn(false);
   app.deathAt = 0;
   app.placed = 0;
+});
+
+net.on(connection, 'selfstate', (state) => {
+  if (app.screen === 'match' && Number.isFinite(state.health)) {
+    player.health = state.health;
+  }
 });
 
 net.on(connection, S2C.LOADOUT, (msg) => {
@@ -1008,7 +1025,7 @@ net.on(connection, S2C.KILL, (msg) => {
 net.on(connection, S2C.SHOTS, (msg) => {
   // Somebody else fired: tracer plus a positioned bang.
   const weapon = getWeapon(msg.w);
-  if (!weapon || !msg.o || !msg.d) return;
+  if (!weapon || !finiteVec3(msg.o) || !finiteVec3(msg.d)) return;
 
   const origin = msg.o;
   const dir = msg.d;
@@ -1029,6 +1046,11 @@ net.on(connection, S2C.SHOTS, (msg) => {
   const shooter = app.match.roster.get(msg.id);
   const friendly = app.match.mode === 'tdm' && shooter?.team && shooter.team === app.match.myTeam;
   if (!friendly) noteGunfire(minimap, origin);
+});
+
+net.on(connection, S2C.EMOTE, (msg) => {
+  if (msg.id === connection.myId) return;
+  playRemoteEmote(remotes, msg.id, msg.e);
 });
 
 net.on(connection, S2C.ZONE, (msg) => {
@@ -1112,6 +1134,19 @@ function updateRoster(list) {
   // enemies.
   const mine = app.match.roster.get(connection.myId);
   if (mine) app.match.myTeam = mine.team ?? null;
+}
+
+function syncModeUi() {
+  const teamMode = app.match.mode === 'tdm';
+  hud.setTeamScoresVisible(teamMode);
+  setTeamChatAvailable(chat, teamMode);
+  hud.setBattleRoyaleVisible(app.match.mode === 'br');
+}
+
+function finiteVec3(value) {
+  return Array.isArray(value) &&
+    value.length === 3 &&
+    value.every((component) => Number.isFinite(component));
 }
 
 const tmpProject = new THREE.Vector3();
@@ -1351,6 +1386,25 @@ function currentFlags() {
   return f;
 }
 
+const EMOTE_INPUTS = [
+  ['emoteWave', 'wave', 'Wave'],
+  ['emoteYes', 'yes', 'Yes'],
+  ['emoteNo', 'no', 'No'],
+];
+
+function handleEmoteInput(frozen, now) {
+  let requested = null;
+  for (const [action, emote, label] of EMOTE_INPUTS) {
+    if (consumePressed(action)) requested ??= { emote, label };
+  }
+  if (!requested || app.screen !== 'match' || frozen || !player.alive) return;
+  if (now - app.lastEmoteAt < EMOTE_COOLDOWN_MS) return;
+
+  app.lastEmoteAt = now;
+  net.send(connection, C2S.EMOTE, { e: requested.emote });
+  hud.showEmote(requested.label);
+}
+
 function frame() {
   requestAnimationFrame(frame);
 
@@ -1371,6 +1425,7 @@ function step(dt, now) {
     // The lobby's start clock is server-owned but ticked locally, same as the
     // round timer — one message tells us the deadline, the panel counts down.
     if (app.screen === 'lobby') updateLobbyStatus();
+    clearPressed();
     renderer.render(world.scene, camera);
     return;
   }
@@ -1388,7 +1443,7 @@ function step(dt, now) {
   look.dy *= adsScale;
 
   player.yaw -= look.dx;
-  player.pitch = Math.max(-Math.PI / 2 + 0.02, Math.min(Math.PI / 2 - 0.02, player.pitch - look.dy));
+  player.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, player.pitch - look.dy));
   app.lookDelta = look;
 
   // While dead the number keys pick your next class rather than a weapon — you
@@ -1423,6 +1478,7 @@ function step(dt, now) {
 
   const frozen = app.screen === 'match' && app.match.phase !== PHASE.LIVE;
   if (input.locked && !frozen) handleFiring(now, worldStates);
+  handleEmoteInput(frozen, now);
 
   // E picks up the loot you're standing on. Battle royale only: it's the one mode
   // where what you're holding is found rather than chosen.
@@ -1538,6 +1594,9 @@ function step(dt, now) {
 
   renderer.render(world.scene, camera);
   renderWeaponView(weaponView, renderer);
+  // One-shot actions belong to this frame. Leaving an inapplicable action in
+  // the set made it fire minutes later when the phase or mode finally matched.
+  clearPressed();
 }
 
 /**

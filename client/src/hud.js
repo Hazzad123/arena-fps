@@ -4,7 +4,7 @@
 // Everything here is write-only — the HUD never owns game state, it just renders
 // whatever it's handed each frame.
 
-import { MAX_HEALTH } from '@shared/constants.js';
+import { EMOTE_COOLDOWN_MS, MAX_HEALTH } from '@shared/constants.js';
 import { getWeapon, ALL_WEAPON_IDS } from '@shared/weapons.js';
 
 const el = {};
@@ -20,6 +20,7 @@ export function initHud() {
     'pr-hits', 'pr-shots', 'pr-acc', 'pr-streak', 'respawn', 'respawn-title',
     'respawn-by', 'respawn-timer', 'scoreboard', 'scope', 'weapon-rack',
     'damage-numbers', 'kill-banner', 'minimap',
+    'emote-toast',
     'br-alive', 'br-alive-n', 'br-zone', 'br-prompt',
     'results', 'rs-headline', 'rs-score', 'rs-table', 'rs-next', 'rs-regroup',
   ];
@@ -212,6 +213,17 @@ export function killBanner(name, headshot = false) {
   el['kill-banner'].classList.remove('show');
   void el['kill-banner'].offsetWidth;
   el['kill-banner'].classList.add('show');
+}
+
+let emoteTimer = null;
+
+/** Brief first-person confirmation; everybody else sees the actual animation. */
+export function showEmote(label) {
+  const node = el['emote-toast'];
+  node.textContent = `${label} emote`;
+  node.classList.remove('hidden');
+  clearTimeout(emoteTimer);
+  emoteTimer = setTimeout(() => node.classList.add('hidden'), EMOTE_COOLDOWN_MS);
 }
 
 /**

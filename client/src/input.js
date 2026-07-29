@@ -24,6 +24,9 @@ const KEY_MAP = {
   KeyE: 'use',
   KeyT: 'resetPractice',
   KeyL: 'lobby',
+  KeyZ: 'emoteWave',
+  KeyX: 'emoteYes',
+  KeyV: 'emoteNo',
   Tab: 'scoreboard',
 };
 
@@ -38,10 +41,13 @@ export const input = {
   reload: false,
   use: false,
   lobby: false,
+  emoteWave: false,
+  emoteYes: false,
+  emoteNo: false,
   scoreboard: false,
   firing: false,
   ads: false,
-  // Consumed-once flags, cleared by consumePressed().
+  // Consumed-once flags, drained by the frame that received them.
   pressed: new Set(),
   // Accumulated look delta in raw pixels.
   mouseDx: 0,
@@ -123,6 +129,7 @@ function releaseAllKeys() {
   input.ads = false;
   input.mouseDx = 0;
   input.mouseDy = 0;
+  clearPressed();
 }
 
 export async function requestLock() {

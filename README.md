@@ -2,7 +2,8 @@
 
 A browser multiplayer arena FPS for playing with coworkers. No accounts, no
 downloads, no install — share a link, pick a name, go. Three-minute rounds,
-three maps, up to eight players per room, plus a single-player practice range.
+three arena maps, up to eight players per arena room (30 in Battle Royale), plus
+a single-player practice range.
 
 **Desktop only.** It needs a mouse and a keyboard (pointer lock and mouse aim),
 so phones and tablets are out.
@@ -36,18 +37,23 @@ To let people on your network join without deploying, give them
 | Fire | Left mouse |
 | Aim down sights | Right mouse |
 | Reload | `R` |
+| Use / pick up | `E` |
 | Switch weapon | `1`–`8` |
 | Scoreboard | hold `Tab` |
+| Chat / team chat | `Enter` / `Shift` + `Enter` |
+| Emotes | `Z` wave · `X` yes · `V` no |
 | Reset practice targets | `T` |
 | Pause menu | `Esc` (again to resume) |
-| Change class | `1`–`6` while dead or paused |
+| Quick-pick gun type | `1`–`6` while dead or paused |
 | Back to lobby | `L` on the results screen |
 
 **Modes.** Team Deathmatch (auto-balanced teams, friendly fire off),
-Free-for-all, and Gun Game (every kill promotes you up
-pistol → SMG → shotgun → rifle → sniper → knife; win with a knife kill).
+Free-for-all, Gun Game (every kill promotes you up
+pistol → SMG → shotgun → rifle → sniper → knife; win with a knife kill),
+co-op Survival waves, and a 30-player Battle Royale with ground loot and a
+closing zone.
 
-**Lobby.** Up to eight players gather in the room before a match, shown as eight
+**Lobby.** Players gather up to the selected mode's capacity, shown as open
 slots — split by team in TDM — with everyone's ready state. It starts when
 everybody has readied up, and the host (whoever arrived first) can force it or
 change the mode and map. If someone wanders off, a 45-second clock starts once at
@@ -55,15 +61,16 @@ least two people are ready and the match goes without them, so a lobby can't
 deadlock on one person. Nobody is dragged in against a unanimous vote they never
 gave: the clock only runs when a quorum has actually said yes.
 
-**Classes.** Six, each defined entirely by its primary — Assault (rifle), Scout
-(SMG), Breacher (shotgun), Marksman (DMR), Recon (sniper), Support (LMG). Everyone
-also carries the sidearm and knife. Pick one in the lobby, from the pause menu, or
-on the death screen; the choice is remembered between sessions. Changing class
-while you're alive takes effect on your next spawn rather than immediately, so it
-can't be used as a free mid-fight re-arm. Gun Game ignores classes by design.
+**Gun choice.** Pick any of 15 primaries, grouped into six types. Everyone also
+carries the standard sidearm and knife. Pick one in the lobby, from the pause
+menu, or on the death screen; the choice is remembered between sessions.
+Changing it while you're alive takes effect on your next spawn rather than
+immediately, so it can't be used as a free mid-fight re-arm. Gun Game and Battle
+Royale ignore the choice by design.
 
-**Pause menu.** `Esc` releases the mouse and opens it: resume, settings, class,
-and leave. In the practice range it also lists every weapon to click. It does
+**Pause menu.** `Esc` releases the mouse and opens it: resume, the complete
+controls reference, settings, class, and leave. In the practice range it also
+lists every weapon to click. It does
 **not** pause the match — you're still standing there, and it says so.
 
 **End of a round.** A results screen: who won, in their team's colour, the final
@@ -83,8 +90,9 @@ without a line-of-sight check every tag reads straight through walls — a free
 wallhack. Teammates are occluded too: friendly fire is off, so knowing exactly
 where a teammate is standing behind a wall is information nobody needs.
 
-**Weapons.** Eight: knife, sidearm, SMG, shotgun, assault rifle, sniper, support
-LMG, and a marksman rifle. The practice range gives you all of them — keys `1`–`8`,
+**Weapons.** Seventeen across eight number-key slots: a knife; three sidearms;
+three SMGs; three shotguns; three rifles; three precision rifles; and a support
+LMG. The practice range gives you all of them — keys `1`–`8`,
 a rack down the side listing each one, and a clickable list in the pause menu.
 Gun Game deliberately uses only the first six — eight rungs makes the mode outlast
 a three-minute round.
@@ -111,7 +119,7 @@ the match.
 
 | What | Where it's used | Source |
 |---|---|---|
-| 8 gun models | first-person viewmodels, and in remote players' hands | Toon Shooter Game Kit (Quaternius) |
+| 17 weapon models | first-person viewmodels; the character rig supplies 8 simplified held variants for remote players | Toon Shooter Game Kit (Quaternius) |
 | `Character_Soldier` | remote players, with the kit's own animation clips | Toon Shooter Game Kit (Quaternius) |
 | 16 environment props | crates and solid cover in the maps, plus wall dressing | Toon Shooter Game Kit (Quaternius) |
 | 5 surface textures | floors and walls, tiled by world size | 50 Free Stylized Wall Textures |
@@ -160,12 +168,14 @@ but wants the `flyctl` CLI installed.
 npm test
 ```
 
-114 tests, no browser needed. They cover the parts where a bug is silent rather
+170 tests, no browser needed. They cover the parts where a bug is silent rather
 than loud:
 
 - **`shared/collision.js`** — swept AABB movement, ray/box and ray/cylinder
   casts, step-up, ceilings, corners, tunnelling through thin floors. A bug here
   doesn't throw, it just makes the game feel bad.
+- **Hit validation** — exposed head/shoulder shots at Rooftops cover edges pass,
+  while every reported zone still fails through full-height walls.
 - **Map validity** — every spawn clear of geometry, standing on ground, teams far
   enough apart.
 - **Map reachability** (`test/navigation.test.js`) — builds a walkable-surface
@@ -174,12 +184,12 @@ than loud:
   placed above the 1.28m jump height, a staircase that ran underneath the
   balcony it led to, and catwalk stairs that stopped at the underside of their
   own deck.
-- **Lobby, class and round-end rules** (`test/lobby.test.js`) — capacity, host
+- **Lobby, class, emote and round-end rules** (`test/lobby.test.js`) — capacity, host
   promotion, the start rules and every way they could deadlock, that a class
-  change while alive waits for your next spawn, and that a regroup request routes
-  the room to the lobby without letting one player cancel another's. Ways a lobby
-  fails to start are invisible until eight people are stood around waiting, which
-  is the worst time to find out.
+  change while alive waits for your next spawn, emotes are allow-listed and
+  rate-limited, and a regroup request routes the room to the lobby without
+  letting one player cancel another's. Ways a lobby fails to start are invisible
+  until eight people are stood around waiting, which is the worst time to find out.
 
 ### Filling a lobby without any people
 
@@ -195,11 +205,11 @@ Run one browser client alongside to play against them.
 node server/bot.js --count 7 --mode gungame --duration 60
 ```
 
-Useful flags: `--count`, `--mode tdm|ffa|gungame`, `--code ABCD` to join a
+Useful flags: `--count`, `--mode tdm|ffa|gungame|waves|br`, `--code ABCD` to join a
 specific room, `--duration <seconds>` to auto-report and exit, `--quiet`.
 
 Bots ready up on arrival (so the lobby actually starts) and spread themselves
-across the six classes, so a bot match exercises every weapon rather than eight
+across the six classes, so a bot match exercises every class rather than eight
 assault rifles.
 
 To watch whole round cycles without waiting three minutes each, compress the
@@ -212,7 +222,7 @@ ARENA_ROUND_MS=20000 ARENA_COUNTDOWN_MS=2000 ARENA_SCOREBOARD_MS=3000 ARENA_LOBB
 ## How it's built
 
 No game engine, no physics engine, no asset pipeline. Three.js for rendering,
-`ws` for transport, and about 4,000 lines of plain JavaScript.
+`ws` for transport, and about 12,000 lines of plain JavaScript.
 
 ```
 shared/     imported by BOTH client and server, so they can't disagree
@@ -220,11 +230,11 @@ shared/     imported by BOTH client and server, so they can't disagree
   constants.js   every number that affects feel
   weapons.js     weapon stat table
   protocol.js    message types + snapshot encoding
-  maps/          four maps, authored as arrays of boxes
+  maps/          five maps, authored as arrays of boxes
 server/
   index.js       express + ws, room registry, matchmaking
   room.js        room state machine and 20Hz tick
-  modes.js       tdm / ffa / gungame rules
+  modes.js       tdm / ffa / gungame / survival / battle royale rules
   validate.js    movement and hit sanity checks
   bot.js         headless load tester (dev tool)
 client/src/
@@ -234,10 +244,10 @@ client/src/
   remotePlayers.js, mapRenderer.js, weaponView.js, hud.js, practice.js, audio.js
 ```
 
-**Everything is boxes.** Maps are arrays of axis-aligned boxes, which is what
+**Collision is boxes.** Maps are arrays of axis-aligned boxes, which is what
 lets us skip a physics engine entirely — collision is swept AABB against a box
-list, and the whole level renders as a single instanced draw call. Player models,
-guns, and targets are all assembled from boxes in code. Nothing is downloaded.
+list. Visual models and textures load separately and fall back to built-in
+procedural shapes if an asset is unavailable.
 
 **All sound is synthesised at runtime** with WebAudio — gunshots are a filtered
 noise burst plus a low sine thump. No audio files, no licences.

@@ -17,6 +17,7 @@ export const PLAYER_CROUCH_HEIGHT = 1.15;
 export const CROUCH_TRANSITION_SPEED = 4.2;
 export const PLAYER_RADIUS = 0.4;
 export const EYE_OFFSET = 0.15; // below the top of the head
+export const PITCH_LIMIT = Math.PI / 2 - 0.02;
 export const MAX_HEALTH = 100;
 
 // Hitboxes are deliberately wider than the collision radius. Two different jobs:
@@ -27,6 +28,7 @@ export const MAX_HEALTH = 100;
 // of lag compensation.
 export const HITBOX_RADIUS = 0.54; // vs PLAYER_RADIUS 0.4
 export const HITBOX_HEAD_PAD = 0.12; // a little air above the crown still counts
+export const EMOTE_COOLDOWN_MS = 1_200;
 
 // ------------------------------------------------------------ explosive barrels
 // Counted in *shots*, not damage, so a barrel takes the same two hits whether

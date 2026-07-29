@@ -131,6 +131,16 @@ test('everybody ready starts the countdown immediately', (t) => {
   assert.equal(room.graceEndsAt, 0, 'the grace clock is irrelevant once everyone agrees');
 });
 
+test('AI players cannot hold ready humans in the lobby', (t) => {
+  const { room, players } = makeRoom(t, 2);
+  room.addAiPlayer();
+  room.addAiPlayer();
+
+  readyAll(room, players);
+  assert.equal(room.phase, PHASE.COUNTDOWN);
+  assert.equal(room.graceEndsAt, 0);
+});
+
 test('one unready player starts a grace clock instead of blocking forever', (t) => {
   const { room, players } = makeRoom(t, 3);
   room.handleReady(players[0], { ready: true });
@@ -258,6 +268,37 @@ test('ready toggles are ignored outside the lobby', (t) => {
   assert.equal(room.phase, PHASE.LIVE);
 });
 
+test('live players can relay allow-listed emotes without spamming them', (t) => {
+  const { room, players } = makeRoom(t, 2, 'ffa');
+  room.beginRound();
+
+  const recipient = players[1].ws;
+  const before = recipient.received(S2C.EMOTE).length;
+  room.handleEmote(players[0], { e: 'wave' });
+
+  assert.deepEqual(
+    recipient.last(S2C.EMOTE),
+    { m: S2C.EMOTE, id: players[0].id, e: 'wave' },
+  );
+
+  room.handleEmote(players[0], { e: 'not-a-real-animation' });
+  room.handleEmote(players[0], { e: 'yes' });
+  assert.equal(
+    recipient.received(S2C.EMOTE).length,
+    before + 1,
+    'invalid and cooldown-spammed emotes should be ignored',
+  );
+
+  players[0].lastEmoteAt = 0;
+  players[0].alive = false;
+  room.handleEmote(players[0], { e: 'no' });
+  assert.equal(
+    recipient.received(S2C.EMOTE).length,
+    before + 1,
+    'dead players should not emote',
+  );
+});
+
 // -------------------------------------------------------------- host controls
 
 test('the host can change mode from the lobby and teams are rebuilt', (t) => {
@@ -300,6 +341,25 @@ test('the host can pick the map, but only one in rotation', (t) => {
 
   room.handleLobbySet(players[0], { mapId: 'nonsense' });
   assert.equal(room.mapId, 'alley');
+});
+
+test('battle royale always uses the island even when mode and map arrive together', (t) => {
+  const { room, players } = makeRoom(t, 2, 'ffa');
+
+  room.handleLobbySet(players[0], { mode: 'br', mapId: 'alley' });
+  assert.equal(room.mode, 'br');
+  assert.equal(room.mapId, 'island');
+
+  room.handleLobbySet(players[0], { mapId: 'warehouse' });
+  assert.equal(room.mapId, 'island', 'the fixed-map mode must ignore arena map changes');
+});
+
+test('a populated battle royale room cannot switch into a smaller mode', (t) => {
+  const { room, players } = makeRoom(t, 9, 'br');
+
+  room.handleLobbySet(players[0], { mode: 'tdm' });
+  assert.equal(room.mode, 'br');
+  assert.equal(room.capacity(), 30);
 });
 
 test('a non-host cannot change the mode or the map', (t) => {
@@ -483,6 +543,33 @@ test('the results payload carries what the end screen needs', (t) => {
 
   room.handleReturnToLobby(players[0], { on: true });
   assert.deepEqual(room.phasePayload().regroup, [players[0].id]);
+});
+
+test('battle royale results correctly name the island as the next map', (t) => {
+  const { room } = makeRoom(t, 1, 'br');
+  room.beginRound();
+  room.endRound({ reason: 'br', winnerId: 'p0', winnerName: 'Player0' });
+
+  assert.equal(room.phasePayload().nextMapId, 'island');
+});
+
+test('malformed shot traces are sanitised before being relayed', (t) => {
+  const { room, players } = makeRoom(t, 2, 'ffa');
+  room.beginRound();
+
+  room.handleShoot(players[0], {
+    w: players[0].weapon,
+    o: 'not-a-position',
+    d: [Infinity, 0, 0],
+    h: [],
+    b: ['not-a-barrel'],
+  });
+
+  const shot = players[1].ws.last(S2C.SHOTS);
+  assert.ok(shot, 'a valid trigger pull should still be visible to peers');
+  assert.ok(shot.o.every(Number.isFinite));
+  assert.ok(shot.d.every(Number.isFinite));
+  assert.ok(Math.abs(Math.hypot(...shot.d) - 1) < 1e-12);
 });
 
 test('re-sending the phase mid-scoreboard does not extend it', (t) => {

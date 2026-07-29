@@ -13,8 +13,11 @@ import {
   TEAMS, HEALTH_PACK_HEAL, HEALTH_PACK_RADIUS, HEALTH_PACK_RESPAWN_MS,
   WAVE_BREAK_MS, WAVE_FIRST_DELAY_MS, WAVE_MAX_CONCURRENT,
   WAVE_BASE_ENEMIES, WAVE_ENEMIES_PER_WAVE,
+  EMOTE_COOLDOWN_MS,
 } from '../shared/constants.js';
-import { S2C, PHASE, FLAG, MODES, encode, encodeSnapshot, sanitiseChat } from '../shared/protocol.js';
+import {
+  S2C, PHASE, FLAG, MODES, EMOTES, encode, encodeSnapshot, sanitiseChat,
+} from '../shared/protocol.js';
 import { getMap, nextMap, ROTATION } from '../shared/maps/index.js';
 import { PRIMARY_IDS, getPrimary } from '../shared/weapons.js';
 import { pushOutOfSolids, playerOverlapsAny, hasLineOfSight } from '../shared/collision.js';
@@ -24,7 +27,10 @@ import {
   createBrState, tickZone, zonePayload, lootList, takeLoot, aiZoneWaypoint,
   aiConsiderLoot, aliveCount, soleSurvivor,
 } from './br.js';
-import { validateMove, validateHit, validateFireRate, capPelletCount, heightOf, eyeOf } from './validate.js';
+import {
+  validateMove, validateHit, validateFireRate, capPelletCount, heightOf, eyeOf,
+  sanitiseShotTrace,
+} from './validate.js';
 
 const TICK_MS = 1000 / SERVER_TICK_HZ;
 
@@ -158,6 +164,7 @@ export class Room {
       joinedAt: Date.now(),
       rejectedMoves: 0,
       chatTimes: [],
+      lastEmoteAt: 0,
     };
 
     this.players.set(id, player);
@@ -343,7 +350,9 @@ export class Room {
       msLeft: this.phaseEndsAt > 0 ? Math.max(0, this.phaseEndsAt - Date.now()) : 0,
       mapId: this.mapId,
       // The results screen names the map you're about to play.
-      nextMapId: this.phase === PHASE.SCOREBOARD ? nextMap(this.mapId) : null,
+      nextMapId: this.phase === PHASE.SCOREBOARD
+        ? (modes.isBattleRoyale(this.mode) ? 'island' : nextMap(this.mapId))
+        : null,
       teamScores: this.teamScores,
       roster: this.roster(),
       result: this.lastResult,
@@ -376,7 +385,10 @@ export class Room {
   evaluateLobby() {
     if (this.phase !== PHASE.LOBBY) return;
 
-    const players = [...this.players.values()];
+    // AI cannot click Ready and should never hold humans in the lobby. This
+    // matters most after a Battle Royale, where the previous round can leave
+    // twenty-nine fill bots in the roster while the human regroups.
+    const players = this.humans();
     const readyCount = players.filter((p) => p.ready).length;
 
     // Counted in humans, and against this mode's minimum — survival is a solo
@@ -430,7 +442,14 @@ export class Room {
 
     let changed = false;
 
-    if (typeof msg?.mode === 'string' && msg.mode !== this.mode && MODES.includes(msg.mode)) {
+    const requestedModeFits =
+      typeof msg?.mode === 'string' &&
+      this.humanCount() <= modes.capacityFor(msg.mode);
+    if (
+      requestedModeFits &&
+      msg.mode !== this.mode &&
+      MODES.includes(msg.mode)
+    ) {
       this.mode = msg.mode;
       this.teamScores = { A: 0, B: 0 };
 
@@ -465,7 +484,12 @@ export class Room {
       changed = true;
     }
 
-    if (typeof msg?.mapId === 'string' && msg.mapId !== this.mapId && ROTATION.includes(msg.mapId)) {
+    if (
+      !modes.isBattleRoyale(this.mode) &&
+      typeof msg?.mapId === 'string' &&
+      msg.mapId !== this.mapId &&
+      ROTATION.includes(msg.mapId)
+    ) {
       this.mapId = msg.mapId;
       this.map = getMap(this.mapId);
       changed = true;
@@ -800,6 +824,26 @@ export class Room {
     this.broadcast(S2C.CHAT, { system: true, text });
   }
 
+  // ------------------------------------------------------------------- emotes
+
+  /**
+   * Relay one of the animation clips shipped with the shared character model.
+   * Emotes are cosmetic, but the allow-list and cooldown keep a modified client
+   * from turning them into arbitrary payload spam.
+   */
+  handleEmote(player, msg) {
+    if (this.phase !== PHASE.LIVE || !player.alive) return;
+
+    const emote = String(msg?.e ?? '');
+    if (!Object.hasOwn(EMOTES, emote)) return;
+
+    const now = Date.now();
+    if (now - player.lastEmoteAt < EMOTE_COOLDOWN_MS) return;
+    player.lastEmoteAt = now;
+
+    this.broadcast(S2C.EMOTE, { id: player.id, e: emote });
+  }
+
   // ------------------------------------------------------------- health packs
   //
   // Server-authoritative, because they change health. Collected by proximity on
@@ -1080,8 +1124,8 @@ export class Room {
     }
 
     player.pos = result.pos;
-    player.yaw = msg.y;
-    player.pitch = msg.t;
+    player.yaw = result.yaw;
+    player.pitch = result.pitch;
     player.flags = msg.f | 0;
     player.crouching = (player.flags & FLAG.CROUCH) !== 0;
 
@@ -1138,14 +1182,15 @@ export class Room {
 
     const hits = Array.isArray(msg.h) ? msg.h : [];
     const maxPellets = capPelletCount(weaponId, hits.length);
+    const trace = sanitiseShotTrace(player, msg.o, msg.d);
 
     // Tell everyone else a shot was fired so they get a tracer and a bang, even
     // if it hit nothing.
     this.broadcast(S2C.SHOTS, {
       id: player.id,
       w: weaponId,
-      o: msg.o,
-      d: msg.d,
+      o: trace.origin,
+      d: trace.direction,
     }, player);
 
     const damageByVictim = new Map();
@@ -1180,7 +1225,9 @@ export class Room {
 
     // Barrels. Deduplicated so one shotgun blast counts as one hit, not eight.
     if (Array.isArray(msg.b)) {
-      for (const index of new Set(msg.b)) this.hitBarrel(index | 0, player);
+      for (const index of new Set(msg.b)) {
+        if (Number.isInteger(index)) this.hitBarrel(index, player);
+      }
     }
   }
 

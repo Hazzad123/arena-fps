@@ -208,6 +208,7 @@ select:focus {
   padding-top: 0.9rem;
 }
 #settings summary,
+#pause-controls summary,
 #pause-settings summary {
   cursor: pointer;
   color: var(--muted);
@@ -216,6 +217,7 @@ select:focus {
   letter-spacing: 0.09em;
 }
 #settings summary:hover,
+#pause-controls summary:hover,
 #pause-settings summary:hover {
   color: var(--text);
 }
@@ -810,6 +812,22 @@ button.wide {
   font-size: 0.9rem;
   color: var(--accent);
   letter-spacing: 0.06em;
+  text-shadow: 0 2px 8px #000;
+}
+
+#emote-toast {
+  position: absolute;
+  top: 108px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.35rem 0.65rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(10, 12, 16, 0.72);
+  color: var(--muted);
+  font-size: 0.76rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   text-shadow: 0 2px 8px #000;
 }
 
@@ -1609,6 +1627,30 @@ button.wide {
 }
 .pause-section > .label {
   margin-bottom: 0.5rem;
+}
+.controls-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.45rem 0.8rem;
+  align-items: baseline;
+  margin-top: 0.8rem;
+}
+.controls-grid > span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.controls-grid kbd {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  text-align: right;
+  white-space: nowrap;
+}
+.controls-note {
+  margin-top: 0.75rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.45;
 }
 #btn-to-lobby {
   margin-top: 0.5rem;

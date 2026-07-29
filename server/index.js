@@ -228,6 +228,10 @@ function handleMessage(session, ws, msg) {
       if (session.room && session.player) session.room.handleTakeLoot(session.player);
       return;
 
+    case C2S.EMOTE:
+      if (session.room && session.player) session.room.handleEmote(session.player, msg);
+      return;
+
     case C2S.SET_BOTS:
       if (session.room && session.player) session.room.handleSetBots(session.player, msg);
       return;

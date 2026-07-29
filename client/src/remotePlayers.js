@@ -10,7 +10,7 @@ import {
   PLAYER_HEIGHT, PLAYER_CROUCH_HEIGHT, TEAM_COLORS, FFA_COLOR,
   HITBOX_RADIUS, HITBOX_HEAD_PAD,
 } from '@shared/constants.js';
-import { FLAG, hasFlag } from '@shared/protocol.js';
+import { EMOTES, FLAG, hasFlag } from '@shared/protocol.js';
 import { getWeapon } from '@shared/weapons.js';
 import { hasLineOfSight } from '@shared/collision.js';
 import { loadModel, instantiate } from './models.js';
@@ -30,6 +30,7 @@ const ANIM_MID = 100; // every 3rd frame
 const ANIM_FAR_EVERY = 10; // beyond that, every 10th
 
 const CHARACTER_URL = 'models/characters/Character_Soldier.gltf';
+const EMOTE_DURATION_MS = 1_750;
 
 // The material the kit leaves for team colour. Everything else — skin, boots,
 // webbing — stays as authored, so a blue and a red soldier still read as the same
@@ -96,7 +97,25 @@ export function createRemotePlayers(scene) {
   loadModel(CHARACTER_URL).then((loaded) => {
     character.model = loaded;
   });
-  return { scene, entities: new Map(), labelLayer: createLabelLayer(), character };
+  return {
+    scene,
+    entities: new Map(),
+    emotes: new Map(),
+    labelLayer: createLabelLayer(),
+    character,
+  };
+}
+
+/** Queue a cosmetic animation even if the player's model has not appeared yet. */
+export function playRemoteEmote(rp, id, emote, now = performance.now()) {
+  if (!id || !Object.hasOwn(EMOTES, emote)) return false;
+  rp.emotes.set(id, {
+    clip: EMOTES[emote],
+    name: emote,
+    startedAt: now,
+    until: now + EMOTE_DURATION_MS,
+  });
+  return true;
 }
 
 function createLabelLayer() {
@@ -135,7 +154,7 @@ function buildFigure(color) {
   add(teamMat, 0.56, 0.66, 0.34, 0, 1.13, 0); // torso
   add(teamMat, 0.16, 0.5, 0.18, -0.35, 1.2, 0); // left arm
   const armR = add(teamMat, 0.16, 0.5, 0.18, 0.35, 1.2, 0);
-  add(skinMat, 0.3, 0.3, 0.3, 0, 1.63, 0); // head
+  const head = add(skinMat, 0.3, 0.3, 0.3, 0, 1.63, 0);
   // A visor block on the front of the head — the cheapest possible facing cue.
   add(mat(0x22262c), 0.32, 0.1, 0.06, 0, 1.65, -0.16);
 
@@ -151,6 +170,8 @@ function buildFigure(color) {
   return {
     group,
     armPivot,
+    armR,
+    head,
     weapon,
     legL,
     legR,
@@ -239,7 +260,7 @@ function playClip(character, name, { loop = true } = {}) {
 }
 
 function showHeldWeapon(character, weaponId) {
-  const wanted = heldMeshFor(weaponId);
+  const wanted = weaponId ? heldMeshFor(weaponId) : null;
   if (character.heldName === wanted) return;
   character.heldName = wanted;
   for (const [name, mesh] of character.held) mesh.visible = name === wanted;
@@ -277,6 +298,10 @@ function colorFor(mode, myTeam, theirTeam) {
  */
 export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, camera, solids, dt = 0 }) {
   const seen = new Set();
+  const now = performance.now();
+  for (const [id, emote] of rp.emotes) {
+    if (emote.until <= now) rp.emotes.delete(id);
+  }
 
   for (const [id, state] of states) {
     if (id === myId) continue;
@@ -316,6 +341,8 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
     }
     if (info && entity.label.textContent !== info.name) entity.label.textContent = info.name;
 
+    const emote = rp.emotes.get(id) ?? null;
+
     // ---- death ----
     // The body stays and plays the rig's Death clip rather than blinking out of
     // existence. Previously the group was hidden the instant the DEAD flag
@@ -323,6 +350,7 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
     // for — was never seen once.
     const dead = hasFlag(state.flags, FLAG.DEAD);
     if (dead) {
+      rp.emotes.delete(id);
       entity.label.style.display = 'none';
       entity.group.visible = true;
       // Freeze where they fell. The server stops updating a dead player's
@@ -363,17 +391,21 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
       // The rig has a Duck clip, so squashing the whole figure — which is what the
       // box version has to do — would be crouching twice.
       entity.group.scale.y = 1;
-      showHeldWeapon(entity.character, state.weapon);
-      playClip(entity.character, clipFor({
-        dead: false,
-        airborne: hasFlag(state.flags, FLAG.AIRBORNE),
-        crouched,
-        // Snapshots arrive at 20Hz and are interpolated, so a threshold on
-        // distance moved is steadier than trusting a velocity we don't have.
-        moving: moved > 0.004,
-        sprinting: hasFlag(state.flags, FLAG.SPRINT),
-        firing: hasFlag(state.flags, FLAG.FIRING),
-      }));
+      showHeldWeapon(entity.character, emote ? null : state.weapon);
+      if (emote) {
+        playClip(entity.character, emote.clip, { loop: false });
+      } else {
+        playClip(entity.character, clipFor({
+          dead: false,
+          airborne: hasFlag(state.flags, FLAG.AIRBORNE),
+          crouched,
+          // Snapshots arrive at 20Hz and are interpolated, so a threshold on
+          // distance moved is steadier than trusting a velocity we don't have.
+          moving: moved > 0.004,
+          sprinting: hasFlag(state.flags, FLAG.SPRINT),
+          firing: hasFlag(state.flags, FLAG.FIRING),
+        }));
+      }
       advanceAnimation(entity, camera, dt);
     } else {
       const scaleY = crouched ? PLAYER_CROUCH_HEIGHT / PLAYER_HEIGHT : 1;
@@ -384,6 +416,7 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
       const swing = moved > 0.001 ? Math.sin(entity.stridePhase) * 0.5 : 0;
       entity.legL.rotation.x = swing;
       entity.legR.rotation.x = -swing;
+      applyFallbackEmote(entity, emote, now);
     }
 
     // ---- weapon model roughly matches what they're holding ----
@@ -405,6 +438,24 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
     if (seen.has(id)) continue;
     destroyEntity(rp, entity);
     rp.entities.delete(id);
+    rp.emotes.delete(id);
+  }
+}
+
+function applyFallbackEmote(entity, emote, now) {
+  entity.armR.rotation.z = 0;
+  entity.head.rotation.x = 0;
+  entity.head.rotation.y = 0;
+  entity.weapon.visible = !emote;
+  if (!emote) return;
+
+  const elapsed = (now - emote.startedAt) / 1000;
+  if (emote.name === 'wave') {
+    entity.armR.rotation.z = 2.15 + Math.sin(elapsed * 10) * 0.28;
+  } else if (emote.name === 'yes') {
+    entity.head.rotation.x = Math.sin(elapsed * 13) * 0.28;
+  } else if (emote.name === 'no') {
+    entity.head.rotation.y = Math.sin(elapsed * 13) * 0.42;
   }
 }
 
@@ -511,6 +562,7 @@ function destroyEntity(rp, entity) {
 export function clearRemotePlayers(rp) {
   for (const [, entity] of rp.entities) destroyEntity(rp, entity);
   rp.entities.clear();
+  rp.emotes.clear();
 }
 
 /** Collision targets for our own shooting, built from the interpolated states. */

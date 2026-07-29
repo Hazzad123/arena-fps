@@ -16,6 +16,7 @@ import {
   CROUCH_TRANSITION_SPEED,
   PLAYER_RADIUS,
   EYE_OFFSET,
+  PITCH_LIMIT,
   WALK_SPEED,
   SPRINT_SPEED,
   CROUCH_SPEED,
@@ -33,8 +34,6 @@ import {
 import { moveAndCollide, playerOverlapsAny, pushOutOfSolids } from '@shared/collision.js';
 import { getWeapon, fireIntervalMs } from '@shared/weapons.js';
 import { input, moveAxes, consumeLook, consumePressed } from './input.js';
-
-const PITCH_LIMIT = Math.PI / 2 - 0.02;
 
 export function createLocalPlayer() {
   return {

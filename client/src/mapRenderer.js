@@ -46,14 +46,21 @@ const textureCache = new Map();
 function getTexture(name) {
   if (textureCache.has(name)) return textureCache.get(name);
   const spec = TEXTURES[name];
-  const loader = new THREE.TextureLoader();
-
-  const tex = loader.load(`textures/${spec.file}.jpg`);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  tex.colorSpace = THREE.SRGBColorSpace;
-
-  const entry = { map: tex, metres: spec.metres, tint: spec.tint };
+  const entry = {
+    metres: spec.metres,
+    tint: spec.tint,
+    // Cloning an unloaded Texture marks the clone for upload before it has any
+    // image data, which produces a warning for every textured surface. Wait for
+    // the source image, then clone it into each surface below.
+    ready: new THREE.TextureLoader().loadAsync(`textures/${spec.file}.jpg`)
+      .then((tex) => {
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.colorSpace = THREE.SRGBColorSpace;
+        return tex;
+      })
+      .catch(() => null),
+  };
   textureCache.set(name, entry);
   return entry;
 }
@@ -104,7 +111,7 @@ export function createWorld(renderer) {
   scene.add(sun.target);
 
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
 
   return { scene, hemi, sun, current: null };
 }
@@ -243,16 +250,12 @@ function buildSurfaces(map, mesh) {
     repeatU = Math.max(1, Math.round(repeatU / tex.metres));
     repeatV = Math.max(1, Math.round(repeatV / tex.metres));
 
-    const map2 = tex.map.clone();
-    map2.repeat.set(repeatU, repeatV);
-    map2.needsUpdate = true;
-
     // Mix the map's authored colour in by the texture's own weight: a painted
     // brick brings its colour with it and only wants a hint of the palette, while
     // the desaturated concrete wants nearly all of it.
     const tint = new THREE.Color(0xffffff).lerp(new THREE.Color(solid.color), tex.tint);
 
-    const material = new THREE.MeshLambertMaterial({ map: map2, color: tint });
+    const material = new THREE.MeshLambertMaterial({ color: tint });
 
     const box = new THREE.Mesh(UNIT_CUBE, material);
     box.scale.set(w, h, d);
@@ -264,6 +267,17 @@ function buildSurfaces(map, mesh) {
     box.castShadow = true;
     box.receiveShadow = true;
     group.add(box);
+
+    tex.ready.then((source) => {
+      // A map can rotate while the image request is in flight. An orphaned box
+      // means its material has already been disposed; do not resurrect it or
+      // leak a cloned texture into the next round.
+      if (!source || !group.parent || !box.parent) return;
+      const map2 = source.clone();
+      map2.repeat.set(repeatU, repeatV);
+      material.map = map2;
+      material.needsUpdate = true;
+    });
 
     mesh.setMatrixAt(index, hidden);
     replaced++;
@@ -543,7 +557,6 @@ export function unloadMap(world) {
     // clones came from stay cached for the next one.
     for (const child of surfaces.children) {
       child.material.map?.dispose();
-      
       child.material.dispose();
     }
   }

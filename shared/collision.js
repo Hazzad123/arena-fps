@@ -8,7 +8,7 @@
 // World representation: axis-aligned boxes only. That's what lets us skip a
 // physics engine entirely — see the plan for the reasoning.
 
-import { STEP_HEIGHT } from './constants.js';
+import { HEAD_ZONE_FROM_TOP, LEG_ZONE_FROM_BOTTOM, STEP_HEIGHT } from './constants.js';
 
 const EPS = 1e-4;
 
@@ -381,10 +381,8 @@ function intersectCylinder(origin, dir, base, radius, height, maxDist) {
 }
 
 function hitZone(yFromFeet, height) {
-  // Thresholds live in constants.js but are imported lazily here to keep this
-  // function usable with non-standard heights (crouching, practice targets).
-  if (yFromFeet >= height - 0.3) return 'head';
-  if (yFromFeet <= 0.6) return 'legs';
+  if (yFromFeet >= height - HEAD_ZONE_FROM_TOP) return 'head';
+  if (yFromFeet <= LEG_ZONE_FROM_BOTTOM) return 'legs';
   return 'body';
 }
 
