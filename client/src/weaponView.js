@@ -150,21 +150,30 @@ const HIP = new THREE.Vector3(0.2, -0.18, -0.62);
 // gun's centreline on the crosshair (which is what "align the sights" naively
 // suggests) parks the receiver directly over whatever you're shooting at.
 const ADS = new THREE.Vector3(0.0, -0.175, -0.46);
-const VIEW_SCALE = 0.8;
+const VIEW_SCALE = 0.84;
 // Shrink a little while aimed, so it intrudes even less.
-const ADS_SCALE = 0.72;
-// The source models have very different silhouettes even when their authored
-// lengths are similar. These are deliberately small corrections after the
-// automatic bounds fit, not hand-authored replacement scales for every gun.
-// They keep the obvious outliers in the same visual weight class while
-// preserving the fact that, say, a sawn-off is stubbier than a pump shotgun.
+const ADS_SCALE = 0.76;
+// Imported models vary wildly in height and bulk even after being fitted to
+// the procedural weapon's length. These values normalize their first-person
+// screen footprint while preserving the intended pistol/SMG/rifle hierarchy.
 const WEAPON_VIEW_SCALE = {
-  bullpup: 0.55,
-  sawnoff: 0.72,
-  autoshotgun: 0.9,
-  dmr: 1.15,
-  smg_heavy: 1.25,
-  revolver: 1.35,
+  pistol: 1.18,
+  revolver: 1.8,
+  machinepistol: 1.2,
+  smg: 0.86,
+  smg_compact: 1.18,
+  smg_heavy: 1.12,
+  rifle: 1,
+  carbine: 1,
+  bullpup: 0.92,
+  shotgun: 0.88,
+  sawnoff: 0.56,
+  autoshotgun: 0.78,
+  sniper: 1,
+  dmr: 1.12,
+  antimateriel: 1,
+  lmg: 0.88,
+  knife: 1.55,
 };
 // A few degrees of yaw shows the gun in three-quarter view instead of flat
 // side-on, which reads much better. Purely cosmetic — shots follow the camera.
