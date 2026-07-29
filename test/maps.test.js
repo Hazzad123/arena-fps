@@ -26,6 +26,30 @@ test('the practice range is marked single player and is not in rotation', () => 
   assert.ok(m.targets.length >= 10, 'practice range should have a decent number of targets');
 });
 
+test('battle royale has distinct named areas with useful loot', () => {
+  const map = getMap('island');
+  assert.ok(map.areas.length >= 10, 'the island should have enough landmarks to avoid repeated districts');
+  assert.equal(new Set(map.areas.map((area) => area.id)).size, map.areas.length, 'area ids must be unique');
+  assert.equal(new Set(map.areas.map((area) => area.name)).size, map.areas.length, 'area names must be unique');
+
+  for (const area of map.areas) {
+    assert.ok(area.name.length > 3, `${area.id} needs a readable name`);
+    assert.ok(area.radius >= 35, `${area.name} is too small to function as a drop zone`);
+    assert.ok(
+      area.pos[0] - area.radius >= map.bounds.min[0] &&
+      area.pos[0] + area.radius <= map.bounds.max[0] &&
+      area.pos[1] - area.radius >= map.bounds.min[2] &&
+      area.pos[1] + area.radius <= map.bounds.max[2],
+      `${area.name} escapes the island bounds`,
+    );
+
+    const nearbyLoot = map.lootPoints.filter(
+      (point) => Math.hypot(point.pos[0] - area.pos[0], point.pos[2] - area.pos[1]) <= area.radius,
+    );
+    assert.ok(nearbyLoot.length >= 8, `${area.name} has only ${nearbyLoot.length} reachable loot points`);
+  }
+});
+
 for (const id of MAP_IDS) {
   test(`${id}: geometry is well formed`, () => {
     const map = getMap(id);

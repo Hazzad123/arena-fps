@@ -1,11 +1,13 @@
 // ISLAND — the battle royale map.
 //
-// 540m square, which is roughly eighty times the area of Warehouse. Hand-placing
-// that much cover would be days of work and would read as a corridor shooter
-// stretched out, so it's generated from a deterministic grid of districts: each
-// cell picks a layout from a small set and fills itself, seeded off its own
-// coordinates. Same map every time, no data file, and adding a district type adds
-// variety everywhere at once.
+// 540m square, roughly eighty times the area of Warehouse. The first version
+// filled that space by stamping five district templates across a 9x9 grid. It was
+// technically large but visually read like the same block copied eighty times.
+//
+// This version is a deliberately authored island: large, named landmarks occupy
+// each part of the map, with roads, wilderness and smaller roadside locations
+// connecting them. The geometry is still code-native and deterministic, but a
+// player can now navigate by silhouette instead of by grid coordinate.
 //
 // The design constraints that matter for battle royale specifically:
 //   - No enclosing roof. The zone shrinks toward the middle and you need to be
@@ -21,16 +23,28 @@ import { PLAYER_HEIGHT, PLAYER_RADIUS } from '../constants.js';
 
 const C = {
   ground: 0x6f7a5c,
+  grassDark: 0x465a3e,
+  grassLight: 0x81905c,
+  soil: 0x786044,
   road: 0x585b56,
+  runway: 0x3f4448,
   wall: 0xa89a80,
   wallAlt: 0x92876f,
+  brick: 0x8d5f4e,
+  military: 0x69705c,
   roof: 0x7a6a55,
   concrete: 0x8e8e88,
+  concreteDark: 0x6d716f,
+  stone: 0x77766d,
   metal: 0x5b6068,
+  rust: 0x875a3e,
   wood: 0x6d5237,
   crate: 0xb28c54,
   fence: 0x6b6252,
   water: 0x3f5f6b,
+  tree: 0x344b2e,
+  trunk: 0x59432c,
+  stripe: 0xd7d2b8,
 };
 
 const HALF = 270; // 540m across
@@ -58,15 +72,18 @@ function rand(ix, iz, salt = 0) {
  */
 const SIDES = ['n', 's', 'e', 'w'];
 
-function building({ x, z, w, d, h, color, doorSide = 's', roofColor }) {
+function building({
+  x, z, w, d, h, color, doorSide = 's', doorSides, doorW = 3.2,
+  roofColor, roof = true, y = 0,
+}) {
   const out = [];
   const t = 0.6;
-  const doorW = 3.2;
+  const entrances = doorSides ?? [doorSide];
 
   // Walls, each split around a doorway on the chosen side.
   const wall = (side) => {
     const along = side === 'n' || side === 's' ? w : d;
-    const hasDoor = doorSide === side;
+    const hasDoor = entrances.includes(side);
     const segs = hasDoor
       ? [[-along / 2, -doorW / 2], [doorW / 2, along / 2]]
       : [[-along / 2, along / 2]];
@@ -75,126 +92,442 @@ function building({ x, z, w, d, h, color, doorSide = 's', roofColor }) {
       const len = b - a;
       if (len <= 0.05) continue;
       const mid = (a + b) / 2;
-      if (side === 'n') out.push(box(x + mid, 0, z + d / 2 - t / 2, len, h, t, color));
-      if (side === 's') out.push(box(x + mid, 0, z - d / 2 + t / 2, len, h, t, color));
-      if (side === 'e') out.push(box(x + w / 2 - t / 2, 0, z + mid, t, h, len, color));
-      if (side === 'w') out.push(box(x - w / 2 + t / 2, 0, z + mid, t, h, len, color));
+      if (side === 'n') out.push(box(x + mid, y, z + d / 2 - t / 2, len, h, t, color));
+      if (side === 's') out.push(box(x + mid, y, z - d / 2 + t / 2, len, h, t, color));
+      if (side === 'e') out.push(box(x + w / 2 - t / 2, y, z + mid, t, h, len, color));
+      if (side === 'w') out.push(box(x - w / 2 + t / 2, y, z + mid, t, h, len, color));
     }
   };
   for (const side of ['n', 's', 'e', 'w']) wall(side);
 
-  // Roof. Standable, and reachable from an outside staircase.
-  out.push(box(x, h, z, w, 0.5, d, roofColor ?? C.roof));
+  if (roof) out.push(box(x, y + h, z, w, 0.5, d, roofColor ?? C.roof));
   return out;
 }
 
 /** Outside stairs onto a building's roof, so height is earned rather than given. */
-function roofStairs({ x, z, h, side = 'e', color = C.concrete }) {
+function roofStairs({ x, z, w, h, side = 'e', color = C.concrete, y = 0 }) {
   const run = Math.max(3, h * 2.4);
   if (side === 'e') {
-    return stairs({ x: x + run, y: 0, z, width: 3, rise: h + 0.5, run, axis: 'x', dir: -1, color });
+    return stairs({
+      x: x + w / 2 + run, y, z, width: 3, rise: h + 0.5, run, axis: 'x', dir: -1, color,
+    });
   }
-  return stairs({ x: x - run, y: 0, z, width: 3, rise: h + 0.5, run, axis: 'x', dir: 1, color });
+  return stairs({
+    x: x - w / 2 - run, y, z, width: 3, rise: h + 0.5, run, axis: 'x', dir: 1, color,
+  });
 }
 
-// ---------------------------------------------------------------- districts
+/** A flush coloured patch. Its top is exactly ground level, so it never trips movement. */
+function surface(x, z, w, d, color, texture = 'concrete') {
+  return box(x, -0.08, z, w, 0.08, d, color, `surface:${texture}`);
+}
 
-function districtTown(cx, cz, r) {
+/** Perimeter walls with real openings rather than a sealed decorative compound. */
+function compound({ x, z, w, d, h = 3, color, gates = ['n', 's'], gateW = 8 }) {
   const out = [];
-  const layout = [
-    [-14, -13, 15, 12, 5.5],
-    [13, -12, 14, 11, 4.5],
-    [-12, 14, 13, 12, 7.0],
-    [15, 15, 12, 12, 4.0],
+  const t = 0.8;
+  const addLine = (side, length, fixed, horizontal) => {
+    const hasGate = gates.includes(side);
+    const pieces = hasGate
+      ? [[-length / 2, -gateW / 2], [gateW / 2, length / 2]]
+      : [[-length / 2, length / 2]];
+    for (const [a, b] of pieces) {
+      const mid = (a + b) / 2;
+      const len = b - a;
+      out.push(horizontal
+        ? box(x + mid, 0, fixed, len, h, t, color)
+        : box(fixed, 0, z + mid, t, h, len, color));
+    }
+  };
+  addLine('n', w, z + d / 2, true);
+  addLine('s', w, z - d / 2, true);
+  addLine('e', d, x + w / 2, false);
+  addLine('w', d, x - w / 2, false);
+  return out;
+}
+
+function watchtower(x, z, facing = 's') {
+  const out = [];
+  const top = 5.5;
+  const size = 6;
+  for (const dx of [-2.2, 2.2]) {
+    for (const dz of [-2.2, 2.2]) out.push(box(x + dx, 0, z + dz, 0.65, top, 0.65, C.metal));
+  }
+  out.push(box(x, top, z, size, 0.5, size, C.concreteDark));
+  // Waist-high rails keep the top useful without becoming a perfect fortress.
+  out.push(box(x, top + 0.5, z - size / 2, size, 1.1, 0.35, C.metal));
+  out.push(box(x, top + 0.5, z + size / 2, size, 1.1, 0.35, C.metal));
+  out.push(box(x - size / 2, top + 0.5, z, 0.35, 1.1, size, C.metal));
+  out.push(box(x + size / 2, top + 0.5, z, 0.35, 1.1, size, C.metal));
+  const run = 14;
+  const north = facing === 'n';
+  out.push(...stairs({
+    x,
+    y: 0,
+    z: z + (north ? size / 2 + run : -size / 2 - run),
+    width: 2.3,
+    rise: top + 0.5,
+    run,
+    axis: 'z',
+    dir: north ? -1 : 1,
+    color: C.concrete,
+  }));
+  return out;
+}
+
+function tree(x, z, scale = 1) {
+  return [
+    box(x, 0, z, 0.8 * scale, 4.2 * scale, 0.8 * scale, C.trunk),
+    box(x, 3.7 * scale, z, 4.8 * scale, 2.4 * scale, 4.8 * scale, C.tree),
+    box(x - 0.7 * scale, 5.3 * scale, z + 0.5 * scale, 3.2 * scale, 1.8 * scale, 3.2 * scale, C.grassDark),
   ];
-  for (const [dx, dz, w, d, h] of layout) {
-    out.push(...building({
-      x: cx + dx,
-      z: cz + dz,
-      w,
-      d,
-      h,
-      color: r(1) > 0.5 ? C.wall : C.wallAlt,
-      doorSide: SIDES[Math.floor(r(2) * SIDES.length)],
-    }));
-    if (r(3) > 0.45) out.push(...roofStairs({ x: cx + dx, z: cz + dz, h, side: r(4) > 0.5 ? 'e' : 'w' }));
+}
+
+function rocks(x, z, seed, count = 5) {
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const a = rand(seed, i, 31) * Math.PI * 2;
+    const r = 2 + rand(seed, i, 32) * 7;
+    const w = 1.4 + rand(seed, i, 33) * 2.8;
+    const d = 1.4 + rand(seed, i, 34) * 2.8;
+    const h = 0.9 + rand(seed, i, 35) * 2.6;
+    out.push(box(x + Math.cos(a) * r, 0, z + Math.sin(a) * r, w, h, d, C.stone));
   }
-  // A crossroads through the middle of the block.
-  out.push(box(cx, -0.9, cz, CELL, 0.2, 7, C.road));
-  out.push(box(cx, -0.9, cz, 7, 0.2, CELL, C.road));
   return out;
 }
 
-function districtWarehouses(cx, cz, r) {
-  const out = [];
-  out.push(...building({ x: cx, z: cz, w: 30, d: 22, h: 8, color: C.concrete, doorSide: 's' }));
-  out.push(...roofStairs({ x: cx, z: cz, h: 8, side: 'e' }));
-  // Loading yard: crates and containers outside the big shed.
+function crane(x, z) {
+  return [
+    box(x - 5, 0, z, 1, 9, 1, C.rust),
+    box(x + 5, 0, z, 1, 9, 1, C.rust),
+    box(x, 8.5, z, 12, 0.8, 1, C.rust),
+    box(x + 2, 8.5, z, 0.35, 4.5, 0.35, C.metal),
+  ];
+}
+
+// ---------------------------------------------------------------- named areas
+
+function crownCitadel() {
+  const out = [surface(0, 0, 84, 84, C.stone, 'cobbles')];
+  out.push(...compound({ x: 0, z: 0, w: 74, d: 74, h: 4.5, color: C.wallAlt, gates: SIDES, gateW: 10 }));
+
+  const towers = [
+    [-29, -29, 'e'],
+    [29, -29, 'w'],
+    [-29, 29, 'e'],
+    [29, 29, 'w'],
+  ];
+  for (const [x, z, side] of towers) {
+    out.push(...building({ x, z, w: 12, d: 12, h: 7, color: C.stone, doorSide: side }));
+  }
+  // Two reachable roofs create strong but contestable high ground.
+  out.push(...roofStairs({ x: -29, z: 29, w: 12, h: 7, side: 'w' }));
+  out.push(...roofStairs({ x: 29, z: -29, w: 12, h: 7, side: 'e' }));
+
+  out.push(...building({
+    x: 0, z: 0, w: 27, d: 22, h: 9, color: C.brick, doorSides: ['n', 's'], doorW: 5,
+  }));
+  out.push(...roofStairs({ x: 0, z: 0, w: 27, h: 9, side: 'e', color: C.stone }));
+  out.push(...crateStack({ x: -16, z: 7, height: 2, color: C.crate, seed: 101 }));
+  out.push(...crateStack({ x: 17, z: -8, height: 2, color: C.crate, seed: 102 }));
+  return out;
+}
+
+function blackwaterDocks() {
+  const out = [
+    surface(-214, 0, 92, 126, C.concreteDark),
+    surface(-255, 0, 10, 126, C.water, 'concrete'),
+  ];
+
+  out.push(...building({
+    x: -210, z: -34, w: 34, d: 24, h: 8, color: C.metal,
+    doorSides: ['n', 's'], doorW: 8,
+  }));
+  out.push(...roofStairs({ x: -210, z: -34, w: 34, h: 8, side: 'e' }));
+  out.push(...building({
+    x: -218, z: 39, w: 27, d: 19, h: 6, color: C.rust, doorSide: 'e', doorW: 6,
+  }));
+
+  // Container lanes form short, readable fights rather than a maze.
+  for (const [x, z, alongX, file] of [
+    [-237, -7, false, 'Container_Long'],
+    [-226, -7, false, 'Container_Long'],
+    [-214, 4, true, 'Container_Long'],
+    [-236, 21, true, 'Container_Long'],
+    [-197, 17, false, 'Container_Long'],
+    [-194, -3, false, 'Container_Small'],
+  ]) {
+    out.push(prop(x, 0, z, alongX ? 6.2 : 2.5, 2.5, alongX ? 2.5 : 6.2, C.metal, file));
+  }
+  out.push(...crane(-244, -41));
+  out.push(...crane(-244, 38));
+  out.push(prop(-191, 0, 51, 2.44, 2, 1.3, C.metal, 'TrashContainer'));
+  out.push(barrel(-203, 0, 17), barrel(-205, 0, 18));
+  return out;
+}
+
+function slateQuarry() {
+  const out = [surface(-176, -176, 98, 98, C.stone, 'concrete')];
+  // Terraced square cuts, each broken at a different side. They read as a pit
+  // while keeping the whole quarry traversable with ordinary movement.
+  out.push(...compound({
+    x: -176, z: -176, w: 84, d: 84, h: 1.6, color: C.stone, gates: ['s', 'e'], gateW: 16,
+  }));
+  out.push(...compound({
+    x: -176, z: -176, w: 57, d: 57, h: 2.7, color: C.concreteDark, gates: ['n', 'w'], gateW: 13,
+  }));
+  out.push(...compound({
+    x: -176, z: -176, w: 31, d: 31, h: 3.8, color: C.wallAlt, gates: ['s'], gateW: 9,
+  }));
+  out.push(...rocks(-209, -149, 201, 7));
+  out.push(...rocks(-144, -205, 202, 6));
+  out.push(...rocks(-175, -176, 203, 4));
+
+  // Crusher platform: the quarry's single piece of earned high ground.
+  out.push(box(-142, 4.5, -151, 16, 0.6, 11, C.rust));
+  out.push(box(-148, 0, -155, 0.8, 4.5, 0.8, C.metal));
+  out.push(box(-136, 0, -155, 0.8, 4.5, 0.8, C.metal));
+  out.push(...stairs({
+    x: -142, y: 0, z: -164, width: 3, rise: 5.1, run: 13, axis: 'z', dir: 1, color: C.concrete,
+  }));
+  return out;
+}
+
+function northwatchBase() {
+  const out = [surface(0, -194, 118, 74, C.military, 'concrete')];
+  out.push(...compound({
+    x: 0, z: -194, w: 110, d: 68, h: 3.2, color: C.military, gates: ['s', 'e'], gateW: 12,
+  }));
+  out.push(...building({
+    x: -26, z: -198, w: 29, d: 18, h: 4, color: C.concreteDark,
+    doorSides: ['s', 'e'], doorW: 6,
+  }));
+  out.push(...building({
+    x: 20, z: -210, w: 24, d: 15, h: 5, color: C.military, doorSide: 's', doorW: 5,
+  }));
+  out.push(...watchtower(-45, -218, 's'));
+  out.push(...watchtower(45, -170, 'n'));
+
+  // Above-ground trench lines provide low cover and deliberately kink.
+  for (const [x, z, w, d] of [
+    [-9, -177, 28, 0.8],
+    [5, -184, 0.8, 14],
+    [25, -184, 26, 0.8],
+    [34, -192, 0.8, 16],
+    [-8, -218, 34, 0.8],
+  ]) out.push(box(x, 0, z, w, 1.25, d, C.fence));
+  out.push(prop(2, 0, -201, 3.35, 1.28, 0.92, C.military, 'SackTrench'));
+  out.push(barrel(35, 0, -212), barrel(37, 0, -212));
+  return out;
+}
+
+function meridianPower() {
+  const out = [surface(176, -176, 102, 102, C.concreteDark)];
+  out.push(...compound({
+    x: 176, z: -176, w: 96, d: 96, h: 2.4, color: C.metal, gates: ['w', 's'], gateW: 13,
+  }));
+  out.push(...building({
+    x: 151, z: -187, w: 28, d: 20, h: 8, color: C.metal, doorSide: 'e', doorW: 6,
+  }));
+  out.push(...roofStairs({ x: 151, z: -187, w: 28, h: 8, side: 'w' }));
+
+  // Stepped reactor stacks are unique silhouettes visible from across the island.
+  for (const [x, z] of [[190, -199], [211, -180], [188, -158]]) {
+    out.push(box(x, 0, z, 10, 3, 10, C.concrete));
+    out.push(box(x, 3, z, 8, 4, 8, C.concreteDark));
+    out.push(box(x, 7, z, 6, 8, 6, C.metal));
+  }
+  // Transformer banks: low parallel cover with shooting lanes between.
   for (let i = 0; i < 5; i++) {
-    const ang = r(10 + i) * Math.PI * 2;
-    const rad = 15 + r(20 + i) * 8;
-    out.push(...crateStack({
-      x: cx + Math.cos(ang) * rad,
-      z: cz + Math.sin(ang) * rad,
-      size: 1.8,
-      height: 1 + Math.floor(r(30 + i) * 2),
-      color: C.crate,
-      seed: i + 1,
-    }));
+    out.push(box(144 + i * 13, 0, -145, 8, 2.2, 3.5, i % 2 ? C.rust : C.metal));
   }
-  out.push(prop(cx - 18, 0, cz + 12, 2.44, 2.0, 1.3, C.metal, 'TrashContainer'));
-  out.push(barrel(cx + 16, 0, cz - 14));
-  out.push(barrel(cx + 17.2, 0, cz - 14.8));
+  out.push(prop(169, 0, -170, 0.96, 4.2, 1, C.metal, 'Pipes'));
+  out.push(barrel(157, 0, -158));
   return out;
 }
 
-function districtFields(cx, cz, r) {
+function pinewoodCamp() {
+  const out = [surface(198, 16, 92, 112, C.grassDark, 'concrete')];
+  const trees = [
+    [-34, -41, 1.1], [-18, -48, 0.9], [5, -44, 1.2], [28, -39, 1],
+    [-38, -18, 0.85], [34, -14, 1.15], [-31, 10, 1.05], [38, 13, 0.9],
+    [-37, 36, 1.2], [-13, 45, 0.9], [12, 43, 1.1], [35, 38, 1.05],
+  ];
+  for (const [dx, dz, scale] of trees) out.push(...tree(198 + dx, 16 + dz, scale));
+
+  out.push(...building({
+    x: 190, z: 10, w: 21, d: 16, h: 5.5, color: C.wood, doorSides: ['s', 'e'], doorW: 4.5,
+  }));
+  // Open sawmill canopy: roof and posts, no fake solid walls.
+  out.push(box(220, 5.2, 23, 25, 0.5, 16, C.roof));
+  for (const dx of [-11, 11]) {
+    for (const dz of [-6.5, 6.5]) out.push(box(220 + dx, 0, 23 + dz, 0.6, 5.2, 0.6, C.wood));
+  }
+  for (let i = 0; i < 5; i++) {
+    out.push(box(214 + i * 3, 0.45, 23, 2.1, 0.9, 11, i % 2 ? C.wood : C.trunk));
+  }
+  out.push(...crateStack({ x: 181, z: 30, height: 2, color: C.crate, seed: 301 }));
+  return out;
+}
+
+function sunfieldFarms() {
   const out = [];
-  // Mostly open, broken by hedgerows and a barn. Somebody has to cross this.
-  for (let i = 0; i < 4; i++) {
-    const alongX = r(40 + i) > 0.5;
-    const px = cx + (r(50 + i) - 0.5) * (CELL - 12);
-    const pz = cz + (r(60 + i) - 0.5) * (CELL - 12);
-    const len = 10 + r(70 + i) * 14;
-    out.push(alongX
-      ? box(px, 0, pz, len, 1.6, 0.8, C.fence)
-      : box(px, 0, pz, 0.8, 1.6, len, C.fence));
+  // Alternating crop strips break up the giant green floor before any cover is added.
+  for (let i = 0; i < 8; i++) {
+    out.push(surface(-219 + i * 12, 177, 9, 102, i % 2 ? C.soil : C.grassLight));
   }
-  out.push(...building({ x: cx + 8, z: cz - 8, w: 14, d: 10, h: 6, color: C.wood, doorSide: 'w' }));
-  out.push(...crateStack({ x: cx - 12, z: cz + 10, size: 1.6, height: 2, color: C.crate, seed: 7 }));
+  out.push(...building({
+    x: -176, z: 155, w: 29, d: 20, h: 7, color: C.brick, doorSides: ['n', 's'], doorW: 7,
+  }));
+  out.push(...roofStairs({ x: -176, z: 155, w: 29, h: 7, side: 'e' }));
+  // Grain silos and a windbreak make a recognisable farm skyline.
+  for (const [x, z, h] of [[-207, 135, 11], [-194, 135, 9], [-211, 204, 8]]) {
+    out.push(box(x, 0, z, 6, h, 6, C.concrete));
+  }
+  for (let i = 0; i < 7; i++) out.push(...tree(-221 + i * 15, 222, 0.75 + (i % 2) * 0.15));
+
+  for (const [x, z, w, d] of [
+    [-211, 177, 0.8, 88],
+    [-152, 184, 0.8, 74],
+    [-188, 210, 48, 0.8],
+    [-195, 122, 52, 0.8],
+  ]) out.push(box(x, 0, z, w, 1.45, d, C.fence));
+  out.push(...crateStack({ x: -157, z: 145, height: 2, color: C.crate, seed: 302 }));
   return out;
 }
 
-function districtIndustrial(cx, cz, r) {
+function switchbackYard() {
+  const out = [surface(0, 190, 142, 76, C.soil, 'concrete')];
+  // Three rail lines, with sleepers at intervals. They are flush decoration and
+  // never snag movement.
+  for (const z of [169, 187, 205]) {
+    out.push(surface(0, z - 1.6, 132, 0.35, C.metal));
+    out.push(surface(0, z + 1.6, 132, 0.35, C.metal));
+    for (let x = -60; x <= 60; x += 8) out.push(surface(x, z, 3.5, 5, C.wood));
+  }
+  out.push(...building({
+    x: -43, z: 219, w: 35, d: 13, h: 5, color: C.brick, doorSide: 'n', doorW: 6,
+  }));
+  out.push(...watchtower(50, 218, 'n'));
+  for (const [x, z, long] of [
+    [-32, 171, true], [-12, 171, true], [16, 187, true], [38, 205, true], [55, 171, false],
+  ]) {
+    out.push(prop(x, 0, z, long ? 8 : 2.5, 2.5, long ? 2.5 : 8, C.rust, 'Container_Long'));
+  }
+  out.push(...crane(5, 217));
+  out.push(barrel(-2, 0, 199), barrel(0, 0, 199));
+  return out;
+}
+
+function falconAirfield() {
+  const out = [
+    surface(174, 180, 112, 126, C.grassLight),
+    surface(178, 181, 22, 118, C.runway),
+    surface(216, 181, 28, 72, C.concreteDark),
+  ];
+  // Runway threshold and centreline.
+  for (let z = 131; z <= 231; z += 16) out.push(surface(178, z, 2.2, 8, C.stripe));
+  for (const x of [171, 178, 185]) out.push(surface(x, 126, 3, 12, C.stripe));
+
+  out.push(...building({
+    x: 137, z: 154, w: 38, d: 24, h: 8, color: C.metal,
+    doorSides: ['e', 's'], doorW: 10,
+  }));
+  out.push(...building({
+    x: 137, z: 210, w: 31, d: 21, h: 7, color: C.concrete,
+    doorSide: 'e', doorW: 9,
+  }));
+  // Control tower and its external access.
+  out.push(...building({ x: 222, z: 137, w: 12, d: 12, h: 11, color: C.concreteDark, doorSide: 'w' }));
+  out.push(...roofStairs({ x: 222, z: 137, w: 12, h: 11, side: 'e' }));
+  for (const z of [159, 175, 191, 207]) {
+    out.push(prop(215, 0, z, 3.35, 1.28, 0.92, C.military, 'SackTrench'));
+  }
+  out.push(barrel(149, 0, 180));
+  return out;
+}
+
+function oldMillHamlet() {
+  const out = [surface(-86, 76, 74, 72, C.wallAlt, 'cobbles')];
+  const homes = [
+    [-108, 57, 18, 13, 5, 'e'],
+    [-78, 55, 16, 14, 6, 's'],
+    [-105, 91, 14, 16, 4.5, 'n'],
+    [-72, 94, 20, 13, 5.5, 'w'],
+  ];
+  for (const [x, z, w, d, h, doorSide] of homes) {
+    out.push(...building({ x, z, w, d, h, color: h > 5 ? C.brick : C.wall, doorSide }));
+  }
+  out.push(...roofStairs({ x: -78, z: 55, w: 16, h: 6, side: 'e' }));
+  out.push(...crateStack({ x: -88, z: 79, height: 2, color: C.crate, seed: 401 }));
+  return out;
+}
+
+function ashChapelRuins() {
+  const out = [surface(86, -77, 76, 74, C.stone, 'cobbles')];
+  // A roofless chapel shell, grave rows and a collapsed bell tower.
+  out.push(...building({
+    x: 86, z: -81, w: 24, d: 39, h: 6.5, color: C.wallAlt,
+    doorSides: ['n', 's'], doorW: 5, roof: false,
+  }));
+  out.push(box(86, 0, -62, 8, 9, 8, C.stone));
+  out.push(...stairs({
+    x: 86, y: 0, z: -76, width: 2.6, rise: 9, run: 14, axis: 'z', dir: 1, color: C.stone,
+  }));
+  for (let row = 0; row < 3; row++) {
+    for (let col = 0; col < 4; col++) {
+      out.push(box(60 + col * 7, 0, -100 + row * 9, 1.4, 1.05, 3.2, C.stone));
+    }
+  }
+  out.push(...rocks(111, -54, 402, 6));
+  return out;
+}
+
+/** Arterial routes make rotations legible and connect every major POI. */
+function roads() {
+  return [
+    surface(0, 0, 11, 500, C.road),
+    surface(0, 0, 500, 11, C.road),
+    surface(-174, 88, 9, 176, C.road),
+    surface(174, 88, 9, 176, C.road),
+    surface(-88, -176, 176, 9, C.road),
+    surface(88, 176, 176, 9, C.road),
+  ];
+}
+
+/** Sparse transition cover keeps travel risky without restoring the old grid. */
+function transitionCover() {
   const out = [];
-  out.push(...building({ x: cx - 10, z: cz, w: 18, d: 16, h: 9, color: C.metal, doorSide: 'e' }));
-  out.push(...roofStairs({ x: cx - 10, z: cz, h: 9, side: 'w' }));
-  // Silos: tall, solid, and good cover you cannot shoot through.
-  for (let i = 0; i < 3; i++) {
-    out.push(box(cx + 12, 0, cz - 12 + i * 11, 5, 11 + r(80 + i) * 4, 5, C.concrete));
+  const clusters = [
+    [-92, -126, 501], [-104, -31, 502], [-44, -102, 503],
+    [43, -129, 504], [128, -112, 505], [124, -30, 506],
+    [-129, 28, 507], [-118, 128, 508], [-43, 128, 509],
+    [48, 117, 510], [119, 82, 511], [122, 236, 512],
+  ];
+  for (const [x, z, seed] of clusters) out.push(...rocks(x, z, seed, 4 + (seed % 3)));
+
+  // Roadside barricades alternate sides, preventing kilometre-long sightlines.
+  for (let i = -3; i <= 3; i++) {
+    if (i === 0) continue;
+    out.push(box(i * 58, 0, i % 2 ? -7 : 7, 12, 1.2, 0.8, C.concreteDark));
+    out.push(box(i % 2 ? -7 : 7, 0, i * 58, 0.8, 1.2, 12, C.concreteDark));
   }
-  out.push(prop(cx + 2, 0, cz + 16, 0.96, 4.2, 1.0, C.metal, 'Pipes'));
-  out.push(barrel(cx - 2, 0, cz - 16));
   return out;
 }
 
-function districtRuins(cx, cz, r) {
-  const out = [];
-  // Broken walls: cover everywhere, roofs nowhere.
-  for (let i = 0; i < 9; i++) {
-    const px = cx + (r(90 + i) - 0.5) * (CELL - 10);
-    const pz = cz + (r(100 + i) - 0.5) * (CELL - 10);
-    const len = 5 + r(110 + i) * 10;
-    const h = 1.6 + r(120 + i) * 2.6;
-    out.push(r(130 + i) > 0.5
-      ? box(px, 0, pz, len, h, 0.7, C.wallAlt)
-      : box(px, 0, pz, 0.7, h, len, C.wallAlt));
-  }
-  out.push(...crateStack({ x: cx, z: cz, size: 1.7, height: 2, color: C.crate, seed: 11 }));
-  return out;
-}
-
-const DISTRICTS = [districtTown, districtWarehouses, districtFields, districtIndustrial, districtRuins];
+export const ISLAND_AREAS = [
+  { id: 'citadel', name: 'Crown Citadel', pos: [0, 0], radius: 48 },
+  { id: 'docks', name: 'Blackwater Docks', pos: [-214, 0], radius: 66 },
+  { id: 'quarry', name: 'Slate Quarry', pos: [-176, -176], radius: 54 },
+  { id: 'base', name: 'Northwatch Base', pos: [0, -194], radius: 62 },
+  { id: 'power', name: 'Meridian Power', pos: [176, -176], radius: 58 },
+  { id: 'logging', name: 'Pinewood Camp', pos: [198, 16], radius: 62 },
+  { id: 'farms', name: 'Sunfield Farms', pos: [-176, 177], radius: 62 },
+  { id: 'railyard', name: 'Switchback Yard', pos: [0, 190], radius: 70 },
+  { id: 'airfield', name: 'Falcon Airfield', pos: [174, 180], radius: 70 },
+  { id: 'hamlet', name: 'Old Mill Hamlet', pos: [-86, 76], radius: 42 },
+  { id: 'chapel', name: 'Ash Chapel', pos: [86, -77], radius: 42 },
+];
 
 function build() {
   const b = [];
@@ -210,21 +543,19 @@ function build() {
     [HALF + t / 2, 0, t, HALF * 2 + t * 2],
   ]) b.push(box(dx, -1, dz, w, 9, d, C.concrete));
 
-  // Districts.
-  const half = (GRID - 1) / 2;
-  for (let gx = 0; gx < GRID; gx++) {
-    for (let gz = 0; gz < GRID; gz++) {
-      const cx = (gx - half) * CELL;
-      const cz = (gz - half) * CELL;
-      const r = (salt) => rand(gx + 1, gz + 1, salt);
-      // The centre cell is always a town: the zone ends there, so the last fight
-      // should happen somewhere with cover and rooftops rather than in a field.
-      const pick = gx === half && gz === half
-        ? districtTown
-        : DISTRICTS[Math.floor(r(0) * DISTRICTS.length)];
-      b.push(...pick(cx, cz, r));
-    }
-  }
+  b.push(...roads());
+  b.push(...crownCitadel());
+  b.push(...blackwaterDocks());
+  b.push(...slateQuarry());
+  b.push(...northwatchBase());
+  b.push(...meridianPower());
+  b.push(...pinewoodCamp());
+  b.push(...sunfieldFarms());
+  b.push(...switchbackYard());
+  b.push(...falconAirfield());
+  b.push(...oldMillHamlet());
+  b.push(...ashChapelRuins());
+  b.push(...transitionCover());
 
   return b;
 }
@@ -317,9 +648,10 @@ const BOXES = build();
 
 export default {
   id: 'island',
-  name: 'The Island',
-  blurb: '540m across. Parachute in, loot up, and outrun the storm.',
+  name: 'Crown Island',
+  blurb: 'Eleven distinct drop zones across 540m of forts, docks, farms and wilderness.',
   battleRoyale: true,
+  areas: ISLAND_AREAS,
   skyColor: 0x9fc0d8,
   fogColor: 0xb5cadb,
   fogDensity: 0.0022,

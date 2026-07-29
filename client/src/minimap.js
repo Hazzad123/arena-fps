@@ -49,6 +49,8 @@ export function createMinimap() {
   return {
     canvas,
     ctx: canvas?.getContext('2d') ?? null,
+    areaLabel: document.getElementById('minimap-area'),
+    areaId: null,
     baked: null, // offscreen canvas of the map's walls
     bakedFor: null, // which map id it was baked from
     blips: [], // { x, z, until } gunfire marks
@@ -115,8 +117,22 @@ export function noteGunfire(minimap, at) {
 export function clearMinimap(minimap) {
   minimap.blips.length = 0;
   minimap.contacts.clear();
+  minimap.areaId = null;
+  minimap.areaLabel?.classList.add('hidden');
   minimap.baked = null;
   minimap.bakedFor = null;
+}
+
+function updateAreaLabel(minimap, map, pos) {
+  if (!minimap.areaLabel) return;
+  const area = map.areas?.find(
+    (candidate) => Math.hypot(pos[0] - candidate.pos[0], pos[2] - candidate.pos[1]) <= candidate.radius,
+  );
+  const id = area?.id ?? null;
+  if (id === minimap.areaId) return;
+  minimap.areaId = id;
+  minimap.areaLabel.textContent = area?.name ?? '';
+  minimap.areaLabel.classList.toggle('hidden', !area);
 }
 
 /**
@@ -132,6 +148,7 @@ export function drawMinimap(minimap, { map, player, states, myId, mode, myTeam, 
   if (!ctx || !map) return;
 
   if (minimap.bakedFor !== map.id) bake(minimap, map);
+  updateAreaLabel(minimap, map, player.pos);
   const baked = minimap.baked;
   if (!baked) return;
 

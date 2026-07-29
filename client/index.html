@@ -20,7 +20,10 @@
 
       <!-- Radar. Geometry is baked once per map into an offscreen canvas; only
            the moving dots are redrawn each frame. -->
-      <div id="minimap"><canvas id="minimap-canvas" width="360" height="360"></canvas></div>
+      <div id="minimap">
+        <canvas id="minimap-canvas" width="360" height="360"></canvas>
+        <div id="minimap-area" class="hidden"></div>
+      </div>
 
       <!-- Chat. The log is always present but fades when idle; the input only
            appears while you're actually typing. -->
