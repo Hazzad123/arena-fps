@@ -199,6 +199,11 @@ test('survival spawns escalating waves and clears them', () => {
   const keepAlive = () => {
     human.health = MAX_HEALTH;
     if (!human.alive) room.spawn(human);
+    // Several enemies can legitimately land shots in the same server tick.
+    // Health alone therefore leaves a random chance that the test subject dies
+    // before tickWaves observes them. Protection keeps this a wave-lifecycle
+    // test rather than an AI accuracy lottery.
+    human.spawnProtectedUntil = Infinity;
   };
 
   ticks(room, 100);
