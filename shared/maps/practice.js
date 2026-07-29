@@ -108,6 +108,12 @@ export default {
   sunIntensity: 1.15,
   bounds: { min: [-X_HALF - 4, -12, Z_MIN - 4], max: [X_HALF + 4, 30, Z_MAX + 4] },
   boxes: build(),
+  // Health pickups. Not solids — you walk over them.
+  healthPacks: [
+    [4, 0, -6],
+    [-4, 0, -6],
+  ],
+
   spawns: { ffa: [[0, 0, -8]], A: [[0, 0, -8]], B: [[0, 0, -8]] },
   // Face down-range (+Z). Forward at yaw 0 is -Z, so this is a half turn.
   spawnYaw: Math.PI,

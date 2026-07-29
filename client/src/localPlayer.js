@@ -356,11 +356,17 @@ export function tryFire(p, now, firePressedThisFrame) {
   p.lastShotAt = now;
   if (weapon.mag !== Infinity) p.ammo[p.inventory[p.slotIndex]] -= 1;
 
-  applyRecoil(p, weapon);
-
+  // Direction is read BEFORE recoil is applied. aimDirection() includes the
+  // accumulated recoil offset, so kicking first meant every shot was thrown off
+  // by the kick it had just caused — the sniper's 6° of rise put its own round
+  // 6° above the crosshair, every single time, which at 50m is five metres high.
+  //
+  // Recoil is supposed to spoil your *next* shot, not the one you just fired.
   const origin = eyePosition(p);
   const base = aimDirection(p);
   const spreadDeg = lerp(weapon.spread, weapon.adsSpread, p.adsProgress) * movementSpreadMultiplier(p);
+
+  applyRecoil(p, weapon);
 
   const dirs = [];
   for (let i = 0; i < weapon.pellets; i++) {
@@ -432,12 +438,31 @@ export function applyToCamera(p, camera, baseFov) {
 const TMP = [0, 0, 0];
 
 /** Handle the keyboard actions that only affect our own weapon state. */
+/**
+ * Press a slot key. Several guns can share a slot now — there are three rifles
+ * and one number 5 — so pressing it again cycles through them rather than always
+ * landing on the first. In a match your loadout has one gun per slot, so nothing
+ * changes there; it's the practice range, which hands you all seventeen, where
+ * this is the difference between reaching every gun and reaching eight of them.
+ */
+export function switchToSlot(p, slot, now) {
+  const matches = [];
+  for (const [i, id] of p.inventory.entries()) {
+    if (getWeapon(id).slot === slot) matches.push(i);
+  }
+  if (matches.length === 0) return false;
+
+  const here = matches.indexOf(p.slotIndex);
+  // Already on one of them: step to the next. Otherwise take the first.
+  const next = here >= 0 ? matches[(here + 1) % matches.length] : matches[0];
+  return switchTo(p, next, now);
+}
+
 export function handleWeaponInput(p, now) {
   finishReloadIfDue(p, now);
 
   if (input.weaponSlot > 0) {
-    const idx = p.inventory.findIndex((id) => getWeapon(id).slot === input.weaponSlot);
-    if (idx >= 0) switchTo(p, idx, now);
+    switchToSlot(p, input.weaponSlot, now);
     input.weaponSlot = 0;
   }
 

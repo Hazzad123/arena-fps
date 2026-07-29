@@ -822,6 +822,11 @@ button.wide {
   gap: 0.3rem;
   align-items: flex-end;
 }
+/* Battle royale parks the alive counter in this corner — see
+   setBattleRoyaleVisible in hud.js. */
+#killfeed.below-alive {
+  top: 74px;
+}
 .kf {
   background: rgba(10, 12, 16, 0.7);
   border: 1px solid rgba(255, 255, 255, 0.07);
@@ -940,6 +945,184 @@ button.wide {
   font-size: 0.71rem;
   color: #5f6879;
   line-height: 1.45;
+}
+
+/* A weapon-type heading inside a picker. */
+.pick-group {
+  grid-column: 1 / -1;
+  margin-top: 0.35rem;
+  font-size: 0.66rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.pick-group:first-child {
+  margin-top: 0;
+}
+.pick .key.hidden {
+  display: none;
+}
+
+/* --------------------------- battle royale ---------------------------- */
+
+#br-alive {
+  position: absolute;
+  right: 26px;
+  top: 22px;
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 6px;
+  background: rgba(10, 12, 16, 0.55);
+}
+#br-alive b {
+  font-family: var(--mono);
+  font-size: 1.5rem;
+  font-weight: 800;
+}
+#br-alive span {
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Zone status, under the round timer. */
+#br-zone {
+  position: absolute;
+  left: 50%;
+  top: 78px;
+  transform: translateX(-50%);
+  font-size: 0.82rem;
+  letter-spacing: 0.06em;
+  padding: 0.25rem 0.7rem;
+  border-radius: 6px;
+  background: rgba(10, 12, 16, 0.55);
+  color: var(--muted);
+  white-space: nowrap;
+}
+#br-zone.danger {
+  color: #ffd0cc;
+  background: rgba(190, 45, 40, 0.7);
+  font-weight: 700;
+  animation: zone-pulse 1s ease-in-out infinite;
+}
+@keyframes zone-pulse {
+  50% { background: rgba(150, 30, 26, 0.65); }
+}
+
+/* "Press E" prompt for ground loot. */
+#br-prompt {
+  position: absolute;
+  left: 50%;
+  top: 58%;
+  transform: translateX(-50%);
+  text-align: center;
+  font-size: 0.9rem;
+  padding: 0.35rem 0.8rem;
+  border-radius: 6px;
+  background: rgba(10, 12, 16, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  white-space: nowrap;
+}
+#br-prompt .key {
+  font-family: var(--mono);
+  font-weight: 700;
+  padding: 0.05rem 0.35rem;
+  margin-right: 0.4rem;
+  border-radius: 3px;
+  background: var(--accent);
+  color: #17130a;
+}
+#br-prompt .tier-rare { color: #7ab8ea; }
+#br-prompt .tier-epic { color: #c98ae8; }
+
+/* -------------------------------- chat --------------------------------- */
+
+#chat {
+  position: absolute;
+  left: 22px;
+  bottom: 120px;
+  width: min(420px, 38vw);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  pointer-events: none;
+}
+#chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.82rem;
+  /* Idle chat fades out so it isn't permanent clutter, but goes fully opaque the
+     moment you open the input — you want to read the backlog before replying. */
+  opacity: 0.32;
+  transition: opacity 0.2s;
+  max-height: 9.5rem;
+  overflow: hidden;
+}
+#chat.active #chat-log,
+#chat.recent #chat-log {
+  opacity: 1;
+}
+.chat-line {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(10, 12, 16, 0.5);
+  align-self: flex-start;
+  max-width: 100%;
+  word-break: break-word;
+  color: var(--text);
+}
+.chat-line .who {
+  font-weight: 700;
+}
+.chat-line .tag {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  opacity: 0.75;
+  margin-right: 0.3rem;
+}
+.chat-line.system {
+  color: var(--muted);
+  font-style: italic;
+}
+.chat-line.mine .who {
+  color: var(--accent);
+}
+
+#chat-compose {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  pointer-events: auto;
+  background: rgba(8, 10, 14, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+}
+#chat-scope {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--muted);
+}
+#chat-scope.team {
+  background: var(--team-a);
+  color: #08111c;
+}
+#chat-input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
 }
 
 /* ------------------------------- minimap ------------------------------- */
@@ -1317,6 +1500,13 @@ button.wide {
 #rs-table tr.me td {
   color: var(--accent);
   font-weight: 700;
+}
+/* The elision between the leaderboard and your own row in a big lobby. */
+#rs-table tr.gap td {
+  text-align: center;
+  color: var(--muted);
+  letter-spacing: 0.3em;
+  padding: 0.2rem 0;
 }
 #rs-table tr.me td.place {
   color: var(--accent);

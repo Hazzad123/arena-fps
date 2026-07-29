@@ -22,6 +22,17 @@
            the moving dots are redrawn each frame. -->
       <div id="minimap"><canvas id="minimap-canvas" width="360" height="360"></canvas></div>
 
+      <!-- Chat. The log is always present but fades when idle; the input only
+           appears while you're actually typing. -->
+      <div id="chat">
+        <div id="chat-log"></div>
+        <div id="chat-compose" class="hidden">
+          <span id="chat-scope">ALL</span>
+          <input id="chat-input" type="text" maxlength="140" autocomplete="off"
+                 spellcheck="false" placeholder="say something…" />
+        </div>
+      </div>
+
       <!-- sniper optic: black surround with a lens cut out, plus a reticle -->
       <div id="scope" class="hidden">
         <div id="scope-mask"></div>
@@ -59,21 +70,26 @@
         <div class="pr-row"><span>Shots</span><b id="pr-shots">0</b></div>
         <div class="pr-row"><span>Accuracy</span><b id="pr-acc">—</b></div>
         <div class="pr-row"><span>Best streak</span><b id="pr-streak">0</b></div>
-        <div class="pr-hint">1–8 change gun · R reload · T reset targets · Esc pause</div>
+        <div class="pr-hint">1–8 pick a gun (press again to cycle) · R reload · T reset · Esc pause</div>
       </div>
 
       <!-- weapon rack: populated from the weapon table, so it can't fall out of
            sync with what the number keys actually do -->
       <div id="weapon-rack" class="hidden"></div>
 
+      <!-- battle royale: alive counter, zone warning, and the loot prompt -->
+      <div id="br-alive" class="hidden"><b id="br-alive-n">30</b><span>alive</span></div>
+      <div id="br-zone" class="hidden"></div>
+      <div id="br-prompt" class="hidden"></div>
+
       <div id="respawn" class="hidden">
-        <div class="big">DOWN</div>
+        <div class="big" id="respawn-title">DOWN</div>
         <div id="respawn-by"></div>
         <div id="respawn-timer"></div>
         <!-- pointer lock is still held while dead, so this is driven by the
              number keys rather than the mouse -->
         <div id="respawn-class" class="hidden">
-          <div class="label">Change class — press a number</div>
+          <div class="label">Change gun — press a number</div>
           <div class="class-picker" id="respawn-class-picker"></div>
         </div>
       </div>
@@ -120,6 +136,8 @@
             <option value="tdm">Team Deathmatch</option>
             <option value="ffa">Free-for-all</option>
             <option value="gungame">Gun Game</option>
+            <option value="waves">Survival (solo/co-op)</option>
+            <option value="br">Battle Royale (30)</option>
           </select>
           <button id="btn-create">Create room</button>
         </div>
@@ -175,13 +193,15 @@
               <option value="tdm">Team Deathmatch</option>
               <option value="ffa">Free-for-all</option>
               <option value="gungame">Gun Game</option>
+            <option value="waves">Survival (solo/co-op)</option>
+            <option value="br">Battle Royale (30)</option>
             </select>
             <select id="lobby-map-select"></select>
           </div>
         </div>
 
         <div id="lobby-class">
-          <div class="label">Your class</div>
+          <div class="label">Your gun</div>
           <div class="class-picker" id="lobby-class-picker"></div>
         </div>
 
@@ -209,7 +229,7 @@
         <button id="btn-to-lobby" class="ghost wide hidden">Back to lobby</button>
 
         <div id="pause-class" class="pause-section hidden">
-          <div class="label">Class — applies on your next spawn</div>
+          <div class="label">Gun — applies on your next spawn</div>
           <div class="class-picker" id="pause-class-picker"></div>
         </div>
 

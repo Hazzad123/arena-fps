@@ -12,9 +12,17 @@ import { FLAG, hasFlag } from '@shared/protocol.js';
 import { TEAM_COLORS, FFA_COLOR, PLAYER_HEIGHT } from '@shared/constants.js';
 import { hasLineOfSight } from '@shared/collision.js';
 
-// World metres visible across the radar. Small enough to be useful, large enough
-// to show where the fight is.
-const RANGE = 46;
+// World metres visible across the radar.
+//
+// Scaled to the map rather than fixed: 46m is right for a 60m arena, and on the
+// 284m battle-royale island it shows 16% of the width — you could not see the
+// zone, the fight, or where you were going. Capped so an arena map doesn't zoom
+// out into uselessness either.
+const BASE_RANGE = 46;
+function rangeFor(map) {
+  const span = Math.max(map.bounds.max[0] - map.bounds.min[0], map.bounds.max[2] - map.bounds.min[2]);
+  return Math.min(150, Math.max(BASE_RANGE, span * 0.42));
+}
 
 // How long an enemy's gunfire stays on the radar. Long enough to turn and look,
 // short enough that it's information about *now*.
@@ -25,6 +33,8 @@ const BLIP_MS = 2600;
 const CONTACT_MEMORY_MS = 700;
 
 const COLORS = {
+  zone: 'rgba(95, 200, 255, 0.9)',
+  zoneNext: 'rgba(95, 200, 255, 0.35)',
   bg: 'rgba(10, 13, 18, 0.62)',
   wall: 'rgba(196, 208, 224, 0.30)',
   wallTall: 'rgba(210, 222, 238, 0.46)',
@@ -116,7 +126,7 @@ export function clearMinimap(minimap) {
  * shown. Gunfire leaves a red mark wherever an enemy fired, whether or not you
  * can see them — that's the one thing the radar knows and you don't.
  */
-export function drawMinimap(minimap, { map, player, states, myId, mode, myTeam, roster }) {
+export function drawMinimap(minimap, { map, player, states, myId, mode, myTeam, roster, zone }) {
   const { ctx, canvas } = minimap;
   if (!ctx || !map) return;
 
@@ -128,7 +138,7 @@ export function drawMinimap(minimap, { map, player, states, myId, mode, myTeam, 
   const size = canvas.width;
   const half = size / 2;
   // Radar pixels per world metre.
-  const ppm = size / RANGE;
+  const ppm = size / rangeFor(map);
 
   ctx.clearRect(0, 0, size, size);
 
@@ -157,6 +167,23 @@ export function drawMinimap(minimap, { map, player, states, myId, mode, myTeam, 
     baked.size * drawScale,
     baked.size * drawScale,
   );
+
+  // ---- battle royale zone ----
+  // Drawn in the rotated space so it lines up with the geometry, and both circles
+  // are shown while it's closing: where you're safe now, and where you need to be.
+  if (zone) {
+    const ring = (cx, cz, r, stroke, width) => {
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.arc((cx - player.pos[0]) * ppm, (cz - player.pos[2]) * ppm, r * ppm, 0, Math.PI * 2);
+      ctx.stroke();
+    };
+    if (zone.state === 'shrink' && zone.targetRadius < zone.radius) {
+      ring(zone.targetCentre[0], zone.targetCentre[1], zone.targetRadius, COLORS.zoneNext, 2);
+    }
+    ring(zone.centre[0], zone.centre[1], zone.radius, COLORS.zone, 2.5);
+  }
 
   // ---- gunfire blips ----
   for (let i = minimap.blips.length - 1; i >= 0; i--) {

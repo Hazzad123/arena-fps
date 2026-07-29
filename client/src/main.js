@@ -7,9 +7,13 @@
 import * as THREE from 'three';
 import {
   PHYSICS_DT, MIN_FOV, MAX_FOV, TEAMS, RESPAWN_DELAY_MS, MAX_PLAYERS, BARREL_RADIUS,
+  BR_LOOT_RADIUS,
 } from '@shared/constants.js';
 import { getMap, mapList } from '@shared/maps/index.js';
-import { ALL_WEAPON_IDS, getWeapon, CLASSES, CLASS_IDS, DEFAULT_CLASS } from '@shared/weapons.js';
+import {
+  ALL_WEAPON_IDS, getWeapon, PRIMARY_IDS, getPrimary,
+  WEAPON_TYPES, weaponsOfType,
+} from '@shared/weapons.js';
 import { raycastBoxes, raycastPlayers } from '@shared/collision.js';
 import { C2S, S2C, PHASE, FLAG, MODE_NAMES } from '@shared/protocol.js';
 
@@ -37,6 +41,18 @@ import * as net from './net.js';
 import { createRemotePlayers, syncRemotePlayers, clearRemotePlayers, hitboxesFrom } from './remotePlayers.js';
 import * as audio from './audio.js';
 import { createMinimap, drawMinimap, noteGunfire, clearMinimap } from './minimap.js';
+import {
+  createPickups, loadPickups, setPickupTaken, syncPickups, updatePickups, clearPickups,
+  collectLocally,
+} from './pickups.js';
+import {
+  createChat, openChat, addChatLine, clearChat,
+  chatIsOpen, setTeamChatAvailable,
+} from './chat.js';
+import {
+  createBattleRoyale, setZone, setLoot, removeLoot, nearestLoot,
+  updateBattleRoyale, clearBattleRoyale, isOutsideZone,
+} from './battleroyale.js';
 
 // ---------------------------------------------------------------------- setup
 
@@ -53,6 +69,19 @@ const explosions = createExplosions(world.scene);
 const remotes = createRemotePlayers(world.scene);
 const connection = net.createNet();
 const minimap = createMinimap();
+const pickups = createPickups(world.scene);
+const royale = createBattleRoyale(world.scene);
+
+// Chat has to cooperate with pointer lock: typing needs the lock released, but a
+// released lock is also what opens the pause menu, so the lock handler checks
+// chatIsOpen() before doing that.
+const chat = createChat({
+  onSend: (text, team) => net.send(connection, C2S.CHAT, { t: text, team }),
+  onOpenChange: (open) => {
+    if (open) exitLock();
+    else if (app.screen === 'match' || app.screen === 'practice') requestLock();
+  },
+});
 
 initInput(canvas);
 hud.initHud();
@@ -92,7 +121,12 @@ const app = {
   pendingReports: { fallDamage: 0, void: false },
   deathAt: 0,
   killedBy: '',
+  // Finishing position, in the modes where death is final. 0 means "respawning".
+  placed: 0,
   lastCountdownBeep: -1,
+  nearLoot: null,
+  aliveCount: 0,
+  aliveTotal: 0,
   // Camera shake, decayed every frame. Explosions are the only thing that sets
   // it; a blast you can feel is worth more than a bigger fireball.
   shake: 0,
@@ -102,7 +136,7 @@ const app = {
   lockCheckTimer: null,
   // Our own class. The server holds the authoritative copy; this is what the
   // pickers highlight, and it survives across sessions via settings.
-  myClass: CLASSES[settings.classId] ? settings.classId : DEFAULT_CLASS,
+  myGun: getPrimary(settings.primaryId),
 };
 
 // ----------------------------------------------------------------- dom handles
@@ -241,7 +275,7 @@ async function enterMultiplayer(action, payload) {
     // The class travels with the join. Joining a match already in progress spawns
     // you immediately, so telling the server afterwards would always cost you
     // your first life on the wrong class.
-    net.send(connection, action, { ...payload, classId: app.myClass });
+    net.send(connection, action, { ...payload, primaryId: app.myGun });
   } catch (err) {
     showError(`Couldn’t reach the server. ${err.message}`);
   } finally {
@@ -270,8 +304,12 @@ dom['btn-copy-link'].addEventListener('click', async () => {
 function applyMap(mapId) {
   app.map = getMap(mapId);
   loadMap(world, app.map);
+  loadPickups(pickups, app.map);
   clearRemotePlayers(remotes);
   clearMinimap(minimap);
+  clearPickups(pickups);
+  clearBattleRoyale(royale);
+  hud.setBattleRoyaleVisible(false);
 }
 
 function startPractice() {
@@ -346,6 +384,7 @@ function leaveToMenu() {
   hud.showRespawn(false);
   hud.showResults(false);
   hud.clearKillfeed();
+  clearChat(chat);
   showPause(false);
   dom.lobby.classList.add('hidden');
   dom.menu.classList.remove('hidden');
@@ -358,11 +397,21 @@ function leaveToMenu() {
 // death screen the pointer is still locked to the canvas and the keyboard is the
 // only way to choose.
 
-const CLASS_PICKERS = ['lobby-class-picker', 'pause-class-picker', 'respawn-class-picker'];
+const GUN_PICKERS = ['lobby-class-picker', 'pause-class-picker', 'respawn-class-picker'];
 
 function buildPicker(container, entries, onPick) {
   container.replaceChildren();
+  let lastGroup = null;
   for (const entry of entries) {
+    // A heading per weapon type. Fifteen guns in a flat list is a wall; grouped
+    // by what they are, it's a choice.
+    if (entry.group && entry.group !== lastGroup) {
+      lastGroup = entry.group;
+      const head = document.createElement('div');
+      head.className = 'pick-group';
+      head.textContent = entry.group;
+      container.appendChild(head);
+    }
     const button = document.createElement('button');
     button.className = 'pick';
     button.type = 'button';
@@ -370,7 +419,8 @@ function buildPicker(container, entries, onPick) {
 
     const key = document.createElement('span');
     key.className = 'key';
-    key.textContent = entry.key;
+    key.textContent = entry.key ?? '';
+    key.classList.toggle('hidden', entry.key === undefined);
 
     const body = document.createElement('span');
     body.className = 'body';
@@ -394,32 +444,66 @@ function highlightPicker(container, activeId) {
   }
 }
 
-function classEntries() {
-  return CLASS_IDS.map((id, i) => ({
-    id,
-    key: i + 1,
-    name: CLASSES[id].name,
-    sub: getWeapon(CLASSES[id].primary).name,
-  }));
+/** One entry per selectable gun, grouped under its type. */
+function gunEntries() {
+  const out = [];
+  for (const type of WEAPON_TYPES) {
+    for (const weapon of weaponsOfType(type.id)) {
+      if (!PRIMARY_IDS.includes(weapon.id)) continue;
+      out.push({
+        id: weapon.id,
+        group: type.name,
+        name: weapon.name,
+        sub: describeGun(weapon),
+      });
+    }
+  }
+  return out;
 }
 
-function buildClassPickers() {
-  for (const id of CLASS_PICKERS) buildPicker(dom[id], classEntries(), chooseClass);
+/**
+ * A one-line read on a gun, generated from its own numbers rather than written
+ * per weapon — so it can't drift out of date when the balance changes.
+ */
+function describeGun(w) {
+  const shots = Math.ceil(100 / (w.damage * (w.pellets > 1 ? w.pellets * 0.7 : 1)));
+  const ttk = shots <= 1 ? 'one shot' : `${shots} shots`;
+  const reach = w.falloffEnd >= 120 ? 'long range'
+    : w.falloffEnd >= 55 ? 'mid range'
+      : 'close range';
+  return `${ttk} · ${w.rpm}rpm · ${reach}`;
 }
 
-function refreshClassPickers() {
-  for (const id of CLASS_PICKERS) highlightPicker(dom[id], app.myClass);
+function buildGunPickers() {
+  for (const id of GUN_PICKERS) buildPicker(dom[id], gunEntries(), chooseGun);
 }
 
-/** Ask the server for a class. It decides when that takes effect. */
-function chooseClass(classId) {
-  if (!CLASSES[classId]) return;
-  app.myClass = classId;
-  settings.classId = classId;
+function refreshGunPickers() {
+  for (const id of GUN_PICKERS) highlightPicker(dom[id], app.myGun);
+}
+
+/**
+ * Number keys pick a *type*, not a specific gun: there are fifteen guns and ten
+ * digits, and an arbitrary slice of the first nine would be worse than useless.
+ * So 1-6 grab the first gun of each type — enough to say "give me a shotgun"
+ * without the mouse — and the picker is there for the exact one.
+ */
+function quickPickType(index) {
+  const type = WEAPON_TYPES[index - 1];
+  if (!type) return;
+  const first = weaponsOfType(type.id).find((w) => PRIMARY_IDS.includes(w.id));
+  if (first) chooseGun(first.id);
+}
+
+/** Ask the server for a gun. It decides when that takes effect. */
+function chooseGun(primaryId) {
+  if (!PRIMARY_IDS.includes(primaryId)) return;
+  app.myGun = primaryId;
+  settings.primaryId = primaryId;
   saveSettings();
-  refreshClassPickers();
+  refreshGunPickers();
   audio.playClick();
-  if (connection.connected) net.send(connection, C2S.SETCLASS, { classId });
+  if (connection.connected) net.send(connection, C2S.SET_PRIMARY, { primaryId });
 }
 
 /** The practice range's mouse-driven gun list. The number keys still work; this
@@ -442,13 +526,22 @@ function buildGunPicker() {
   });
 }
 
-buildClassPickers();
+buildGunPickers();
 buildGunPicker();
 
 // ------------------------------------------------------------------- pause
 
 function pauseVisible() {
   return !dom.pause.classList.contains('hidden');
+}
+
+/**
+ * Whether picking a gun means anything in this mode. Gun Game marches everyone up
+ * the same ladder, and battle royale drops everyone with the same pistol — in both
+ * cases the server ignores your choice, so offering the picker is a lie.
+ */
+function gunChoiceMatters(mode) {
+  return mode !== 'gungame' && mode !== 'br';
 }
 
 function showPause(visible) {
@@ -459,8 +552,8 @@ function showPause(visible) {
   dom['pause-note'].textContent = inMatch
     ? 'The match is still running — you are not invisible.'
     : 'Practice range';
-  // Class is a multiplayer concept, and Gun Game hands out its own ladder.
-  dom['pause-class'].classList.toggle('hidden', !inMatch || app.match.mode === 'gungame');
+  // Choosing a gun is a multiplayer concept, and not every mode lets you.
+  dom['pause-class'].classList.toggle('hidden', !inMatch || !gunChoiceMatters(app.match.mode));
   dom['pause-guns'].classList.toggle('hidden', app.screen !== 'practice');
 
   // Regrouping only means anything between rounds, which is also the only time
@@ -477,7 +570,7 @@ function showPause(visible) {
   if (app.screen === 'practice') {
     highlightPicker(dom['pause-gun-picker'], player.inventory[player.slotIndex]);
   }
-  refreshClassPickers();
+  refreshGunPickers();
 }
 
 // Deliberately doesn't hide the panel itself — onLockChange does that once the
@@ -612,9 +705,8 @@ function renderLobby() {
     select.disabled = !inLobbyPhase;
   }
 
-  // Gun Game marches everyone up the same ladder, so a class would be a lie.
-  dom['lobby-class'].classList.toggle('hidden', m.mode === 'gungame');
-  refreshClassPickers();
+  dom['lobby-class'].classList.toggle('hidden', !gunChoiceMatters(m.mode));
+  refreshGunPickers();
 
   const mine = me();
   const ready = !!mine?.ready;
@@ -738,9 +830,15 @@ net.on(connection, S2C.JOINED, (msg) => {
 
   history.replaceState(null, '', `#${msg.code}`);
   hud.setTeamScoresVisible(m.mode === 'tdm');
+  setTeamChatAvailable(chat, m.mode === 'tdm');
+  hud.setBattleRoyaleVisible(m.mode === 'br');
   hud.updateScores(m.teamScores.A, m.teamScores.B);
 
   for (const index of msg.barrelsGone ?? []) scorchBarrel(world, index);
+  syncPickups(pickups, msg.pickupsTaken);
+  if (msg.loot) setLoot(royale, msg.loot);
+  if (msg.zone) setZone(royale, msg.zone);
+  hud.setBattleRoyaleVisible(m.mode === 'br');
 
   if (msg.phase === PHASE.LIVE || msg.phase === PHASE.COUNTDOWN) enterMatch();
   else enterLobby();
@@ -842,15 +940,16 @@ net.on(connection, S2C.RESPAWN, (msg) => {
   setViewWeapon(weaponView, player.inventory[player.slotIndex]);
   hud.showRespawn(false);
   app.deathAt = 0;
+  app.placed = 0;
 });
 
 net.on(connection, S2C.LOADOUT, (msg) => {
   setLoadout(player, msg.inventory);
   setViewWeapon(weaponView, player.inventory[0]);
   // The server confirming a class change is the authoritative answer.
-  if (msg.classId && CLASSES[msg.classId]) {
-    app.myClass = msg.classId;
-    refreshClassPickers();
+  if (msg.primaryId && PRIMARY_IDS.includes(msg.primaryId)) {
+    app.myGun = msg.primaryId;
+    refreshGunPickers();
   }
   if (msg.promoted) {
     hud.setStateBanner(`Promoted: ${getWeapon(msg.inventory[0]).name}`);
@@ -862,6 +961,8 @@ net.on(connection, S2C.LOADOUT, (msg) => {
 net.on(connection, S2C.DAMAGE, (msg) => {
   if (msg.self) {
     player.health = msg.health;
+    // A health pack arrives on the same message; it isn't damage.
+    if (msg.heal) return;
     audio.playHurt();
     hud.damageIndicator(msg.from ? directionTo(msg.from) : null);
     if (msg.health <= 0) player.alive = false;
@@ -900,6 +1001,7 @@ net.on(connection, S2C.KILL, (msg) => {
     player.alive = false;
     app.deathAt = performance.now();
     app.killedBy = msg.killerName ?? '';
+    app.placed = msg.placed || 0;
   }
 });
 
@@ -927,6 +1029,40 @@ net.on(connection, S2C.SHOTS, (msg) => {
   const shooter = app.match.roster.get(msg.id);
   const friendly = app.match.mode === 'tdm' && shooter?.team && shooter.team === app.match.myTeam;
   if (!friendly) noteGunfire(minimap, origin);
+});
+
+net.on(connection, S2C.ZONE, (msg) => {
+  setZone(royale, msg);
+});
+
+net.on(connection, S2C.LOOT, (msg) => {
+  if (msg.all) setLoot(royale, msg.all);
+  if (msg.taken) removeLoot(royale, msg.taken);
+});
+
+net.on(connection, S2C.ALIVE, (msg) => {
+  app.aliveCount = msg.alive;
+  app.aliveTotal = msg.total;
+  hud.updateAlive(msg.alive, msg.total);
+});
+
+net.on(connection, S2C.PICKUP, (msg) => {
+  setPickupTaken(pickups, msg.index, !!msg.taken);
+  if (!msg.taken) return;
+
+  // A rising two-tone for the person who took it, a positioned blip for everyone
+  // else — so you know a pack has gone even if you didn't see who took it.
+  if (msg.by === connection.myId) {
+    audio.playFanfare(true);
+  } else if (msg.at) {
+    const eye = eyePosition(player);
+    const { pan, distance } = audio.spatialise(msg.at, eye, player.yaw);
+    audio.playClick(1.5, { pan, distance });
+  }
+});
+
+net.on(connection, S2C.PICKUPS, (msg) => {
+  syncPickups(pickups, msg.taken);
 });
 
 net.on(connection, S2C.BARREL_HIT, (msg) => {
@@ -959,6 +1095,10 @@ net.on(connection, S2C.BARRELS, (msg) => {
   // nothing — the map itself is reloaded on a phase change. Only the explicit
   // "already gone" list needs applying.
   for (const index of msg.gone ?? []) scorchBarrel(world, index);
+});
+
+net.on(connection, S2C.CHAT, (msg) => {
+  addChatLine(chat, msg, connection.myId);
 });
 
 function updateRoster(list) {
@@ -1058,7 +1198,8 @@ onLockChange((locked) => {
   if (locked) {
     showPause(false);
     audio.resumeAudio();
-  } else if (inGame) {
+  } else if (inGame && !chatIsOpen(chat)) {
+    // Typing releases the lock deliberately; that isn't a request to pause.
     showPause(true);
   }
 });
@@ -1066,6 +1207,16 @@ onLockChange((locked) => {
 window.addEventListener('keydown', (e) => {
   // Don't hijack keys while a select or a text field has focus.
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName ?? '');
+
+  // Enter opens chat in a match; Shift+Enter opens it in team mode. Handled here
+  // rather than in input.js because input.js only sees keys while the pointer is
+  // locked, and the whole point of chat is that it isn't.
+  if (!typing && app.screen === 'match' && !pauseVisible()
+      && (e.code === 'Enter' || e.code === 'NumpadEnter')) {
+    e.preventDefault();
+    openChat(chat, { team: e.shiftKey });
+    return;
+  }
 
   if (app.screen === 'lobby') {
     if (e.code === 'Escape') leaveToMenu();
@@ -1084,11 +1235,11 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Number keys pick a class from the pause menu too, matching the death screen.
+  // Number keys pick a weapon type from the pause menu too, matching the death
+  // screen.
   const num = e.code.match(/^Digit([1-9])$/);
   if (num && !typing && !dom['pause-class'].classList.contains('hidden')) {
-    const id = CLASS_IDS[Number(num[1]) - 1];
-    if (id) chooseClass(id);
+    quickPickType(Number(num[1]));
   }
 });
 
@@ -1245,9 +1396,8 @@ function step(dt, now) {
   // can't reach the picker on screen. Has to run before handleWeaponInput,
   // which consumes the same keypress.
   if (app.screen === 'match' && !player.alive && app.match.mode !== 'gungame' && input.weaponSlot > 0) {
-    const id = CLASS_IDS[input.weaponSlot - 1];
+    quickPickType(input.weaponSlot);
     input.weaponSlot = 0;
-    if (id) chooseClass(id);
   }
 
   const previousWeapon = player.inventory[player.slotIndex];
@@ -1273,6 +1423,12 @@ function step(dt, now) {
 
   const frozen = app.screen === 'match' && app.match.phase !== PHASE.LIVE;
   if (input.locked && !frozen) handleFiring(now, worldStates);
+
+  // E picks up the loot you're standing on. Battle royale only: it's the one mode
+  // where what you're holding is found rather than chosen.
+  if (consumePressed('use') && app.match.mode === 'br' && app.nearLoot) {
+    net.send(connection, C2S.TAKE_LOOT, {});
+  }
 
   if (app.screen === 'practice' && consumePressed('resetPractice')) {
     resetRange(app.range);
@@ -1330,6 +1486,7 @@ function step(dt, now) {
       mode: app.match.mode,
       myTeam: app.match.myTeam,
       roster: app.match.roster,
+      zone: royale.active ? royale.zone : null,
     });
   }
 
@@ -1347,6 +1504,26 @@ function step(dt, now) {
   updateTracers(tracers, now);
   updateImpacts(impacts, now);
   updateExplosions(explosions, now);
+  updatePickups(pickups, now);
+  updateBattleRoyale(royale, now, dt);
+
+  // The practice range has no server, so it collects its own health packs.
+  if (app.screen === 'practice') {
+    const healed = collectLocally(pickups, player, now);
+    if (healed > 0) audio.playFanfare(true);
+  }
+
+  if (app.match.mode === 'br' && royale.active) {
+    // Loot prompt: nearest pickup within arm's reach.
+    app.nearLoot = player.alive ? nearestLoot(royale, player.pos, BR_LOOT_RADIUS + 0.6) : null;
+    hud.showLootPrompt(app.nearLoot);
+    hud.updateZone({
+      state: royale.zone?.state,
+      msToNext: royale.zone?.msToNext ?? 0,
+      outside: player.alive && isOutsideZone(royale, player.pos),
+      dps: royale.zone?.dps ?? 0,
+    });
+  }
   app.shake *= Math.max(0, 1 - 6.5 * dt);
 
   const weapon = currentWeapon(player);
@@ -1361,6 +1538,30 @@ function step(dt, now) {
 
   renderer.render(world.scene, camera);
   renderWeaponView(weaponView, renderer);
+}
+
+/**
+ * What the death screen should say. Three genuinely different situations wearing
+ * the same overlay: a short wait, a long wait, and no wait at all.
+ */
+function deathScreenText(mode, elapsed) {
+  if (mode === 'br') {
+    // No respawn is coming. Placement is the score, so lead with it.
+    const total = app.aliveTotal || app.match.roster.size;
+    return {
+      title: 'ELIMINATED',
+      status: app.placed > 0 ? `#${app.placed} of ${total}` : 'out of the match',
+    };
+  }
+  if (mode === 'waves') {
+    // Revived at the top of the next wave, which is however long your team takes.
+    return { title: 'DOWN', status: 'back up next wave' };
+  }
+  const msLeft = Math.max(0, RESPAWN_DELAY_MS - elapsed);
+  return {
+    title: 'DOWN',
+    status: msLeft > 0 ? `respawning in ${(msLeft / 1000).toFixed(1)}s` : 'respawning…',
+  };
 }
 
 function updateMatchHud(now) {
@@ -1384,10 +1585,11 @@ function updateMatchHud(now) {
   // down so the wait doesn't feel indefinite.
   if (!player.alive && m.phase === PHASE.LIVE) {
     const elapsed = app.deathAt > 0 ? now - app.deathAt : 0;
-    hud.showRespawn(true, app.killedBy, Math.max(0, RESPAWN_DELAY_MS - elapsed));
-    // Being dead is the other moment you'd want to change class, and the only
-    // one where it's free. Gun Game issues its own weapon, so not there.
-    dom['respawn-class'].classList.toggle('hidden', m.mode === 'gungame');
+    const death = deathScreenText(m.mode, elapsed);
+    hud.showRespawn(true, app.killedBy, death.status, death.title);
+    // Being dead is the other moment you'd want to change gun, and the only one
+    // where it's free.
+    dom['respawn-class'].classList.toggle('hidden', !gunChoiceMatters(m.mode));
   }
 
   // Tab holds the scoreboard open mid-round.

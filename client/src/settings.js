@@ -2,7 +2,7 @@
 // is the entire notion of "your profile".
 
 import { DEFAULT_FOV, DEFAULT_SENSITIVITY, MIN_FOV, MAX_FOV } from '@shared/constants.js';
-import { CLASSES, DEFAULT_CLASS } from '@shared/weapons.js';
+import { getPrimary, DEFAULT_PRIMARY } from '@shared/weapons.js';
 
 const KEY = 'arena.settings.v1';
 
@@ -14,7 +14,7 @@ const DEFAULTS = {
   invertY: false,
   // Whichever class you picked last. People settle on one and shouldn't have to
   // re-pick it every time they open the tab.
-  classId: DEFAULT_CLASS,
+  primaryId: DEFAULT_PRIMARY,
 };
 
 function clamp(v, lo, hi) {
@@ -32,7 +32,7 @@ function load() {
       fov: clamp(Number(parsed.fov) || DEFAULT_FOV, MIN_FOV, MAX_FOV),
       volume: clamp(Number(parsed.volume ?? DEFAULTS.volume), 0, 1),
       invertY: Boolean(parsed.invertY),
-      classId: CLASSES[parsed.classId] ? parsed.classId : DEFAULT_CLASS,
+      primaryId: getPrimary(parsed.primaryId),
     };
   } catch {
     // Corrupt or blocked storage shouldn't stop someone playing.

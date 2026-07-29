@@ -9,14 +9,18 @@ import { getWeapon, ALL_WEAPON_IDS } from '@shared/weapons.js';
 
 const el = {};
 
+/** How many rows the end-of-round table shows before it starts eliding. */
+const TABLE_LIMIT = 10;
+
 export function initHud() {
   const ids = [
     'hud', 'crosshair', 'hitmarker', 'damage-vignette', 'hud-top', 'hud-state',
     'score-a', 'score-b', 'round-timer', 'killfeed', 'health-fill', 'health-num',
     'weapon-name', 'ammo', 'ammo-mag', 'reload-hint', 'practice-stats',
-    'pr-hits', 'pr-shots', 'pr-acc', 'pr-streak', 'respawn', 'respawn-by',
-    'respawn-timer', 'scoreboard', 'scope', 'weapon-rack',
+    'pr-hits', 'pr-shots', 'pr-acc', 'pr-streak', 'respawn', 'respawn-title',
+    'respawn-by', 'respawn-timer', 'scoreboard', 'scope', 'weapon-rack',
     'damage-numbers', 'kill-banner', 'minimap',
+    'br-alive', 'br-alive-n', 'br-zone', 'br-prompt',
     'results', 'rs-headline', 'rs-score', 'rs-table', 'rs-next', 'rs-regroup',
   ];
   for (const id of ids) el[id] = document.getElementById(id);
@@ -68,6 +72,49 @@ export function highlightWeapon(weaponId) {
   for (const row of el['weapon-rack'].children) {
     row.classList.toggle('active', row.dataset.weapon === weaponId);
   }
+}
+
+/** Battle royale HUD: alive counter, zone status, loot prompt. */
+export function setBattleRoyaleVisible(visible) {
+  el['br-alive'].classList.toggle('hidden', !visible);
+  el['br-zone'].classList.toggle('hidden', !visible);
+  if (!visible) el['br-prompt'].classList.add('hidden');
+  // The alive counter takes the top-right corner the killfeed normally owns, and
+  // battle royale is where the killfeed is busiest — thirty players means it's
+  // never empty. Drop it below the counter for the duration.
+  el.killfeed.classList.toggle('below-alive', !!visible);
+}
+
+export function updateAlive(alive, total) {
+  el['br-alive-n'].textContent = alive;
+  el['br-alive'].title = `${alive} of ${total} still standing`;
+}
+
+export function updateZone({ state, msToNext, outside, dps }) {
+  const z = el['br-zone'];
+  z.classList.toggle('danger', !!outside);
+  if (outside) {
+    z.textContent = `OUTSIDE THE ZONE — ${Math.round(dps)} damage a second. Get inside.`;
+    return;
+  }
+  const secs = Math.ceil(msToNext / 1000);
+  z.textContent = state === 'shrink'
+    ? `Zone closing — ${secs}s`
+    : `Zone holds for ${secs}s`;
+}
+
+export function showLootPrompt(loot) {
+  const p = el['br-prompt'];
+  p.classList.toggle('hidden', !loot);
+  if (!loot) return;
+  p.innerHTML = '';
+  const key = document.createElement('span');
+  key.className = 'key';
+  key.textContent = 'E';
+  const name = document.createElement('span');
+  name.className = `tier-${loot.tier}`;
+  name.textContent = `Pick up ${loot.name}`;
+  p.append(key, name);
 }
 
 /** The radar is match-only — the practice range has nobody to track. */
@@ -242,11 +289,19 @@ export function setStateBanner(text) {
   el['hud-state'].textContent = text ?? '';
 }
 
-export function showRespawn(visible, killerName = '', msLeft = 0) {
+/**
+ * The death screen. `title` and `status` are passed in rather than derived here,
+ * because what being dead means depends entirely on the mode: in Team Deathmatch
+ * it's a five-second wait, in survival it's sitting out until the wave is cleared,
+ * and in battle royale it's the end of your match. Telling a battle royale player
+ * they're "respawning…" is simply false.
+ */
+export function showRespawn(visible, killerName = '', status = '', title = 'DOWN') {
   el.respawn.classList.toggle('hidden', !visible);
   if (!visible) return;
+  el['respawn-title'].textContent = title;
   el['respawn-by'].textContent = killerName ? `killed by ${killerName}` : '';
-  el['respawn-timer'].textContent = msLeft > 0 ? `respawning in ${(msLeft / 1000).toFixed(1)}s` : 'respawning…';
+  el['respawn-timer'].textContent = status;
 }
 
 // ------------------------------------------------------------------ practice
@@ -334,8 +389,27 @@ export function showResults(visible, data = null) {
     (teamMode ? '<th>Team</th>' : '') +
     '<th class="num">Score</th><th class="num">K</th><th class="num">D</th><th class="num">K/D</th></tr>';
 
-  const body = rows
-    .map((p, i) => {
+  // Battle royale puts thirty names in here. All thirty overflow the panel, and
+  // the one row you actually care about — your own — ends up below the fold, where
+  // pointer lock makes it awkward to scroll to. So past a dozen players it shows
+  // the leaderboard and your own line, with a gap between.
+  const myIndex = rows.findIndex((p) => p.id === myId);
+  let shown = rows.map((p, i) => ({ p, place: i + 1 }));
+  if (shown.length > TABLE_LIMIT + 2) {
+    shown = shown.slice(0, TABLE_LIMIT);
+    if (myIndex >= TABLE_LIMIT) {
+      shown.push({ gap: true });
+      shown.push({ p: rows[myIndex], place: myIndex + 1 });
+    }
+  }
+
+  const body = shown
+    .map(({ p, place, gap }) => {
+      if (gap) {
+        const span = teamMode ? 7 : 6;
+        return `<tr class="gap"><td colspan="${span}">⋯</td></tr>`;
+      }
+      const i = place - 1;
       const mine = p.id === myId ? ' class="me"' : '';
       const swatch = teamMode
         ? `<span class="swatch" style="background:${p.team === 'A' ? 'var(--team-a)' : 'var(--team-b)'}"></span>`

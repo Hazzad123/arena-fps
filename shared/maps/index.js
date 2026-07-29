@@ -3,11 +3,12 @@ import warehouse from './warehouse.js';
 import rooftops from './rooftops.js';
 import alley from './alley.js';
 import practice from './practice.js';
+import island from './island.js';
 
 // The three competitive maps, in rotation order.
 export const ROTATION = ['warehouse', 'rooftops', 'alley'];
 
-const RAW = { warehouse, rooftops, alley, practice };
+const RAW = { warehouse, rooftops, alley, practice, island };
 
 // Boxes are compiled to min/max form once, on first request, and cached. Both
 // the client and the server go through here so neither can end up with a
@@ -48,7 +49,15 @@ export function getMap(id) {
   // Thin metal drums shouldn't stop a blast anyway.
   const blastSolids = barrels.length ? solids.filter((s) => !s.tag?.startsWith('barrel:')) : solids;
 
-  const map = { ...raw, solids, barrels, blastSolids };
+  // Health pickups, normalised into objects with an index so the server can refer
+  // to one over the wire. Deliberately absent from `solids`: a pickup you bump
+  // into is a pickup you can't collect.
+  const healthPacks = (raw.healthPacks ?? []).map((pos, index) => ({ index, pos: [...pos] }));
+
+  // Loot spawn points, normalised like the pickups. Battle royale only.
+  const lootPoints = (raw.lootPoints ?? []).map((pos, index) => ({ index, pos: [...pos] }));
+
+  const map = { ...raw, solids, barrels, blastSolids, healthPacks, lootPoints };
   cache.set(id, map);
   return map;
 }

@@ -17,6 +17,18 @@ import { loadModel, instantiate } from './models.js';
 
 const SKIN = 0xc8a583;
 
+// Animation is throttled by distance, not culled by it.
+//
+// Thirty players each carry a skinned clone with its own AnimationMixer, and
+// updating all of them every frame is real CPU work — bone matrices for ~30 bones
+// apiece — for bodies that are a few pixels tall. But they must stay *visible*: the
+// island has 260m sightlines and the Anti-Materiel reaches 260m, so a body that
+// vanishes at 90m would make long-range shooting impossible. Freezing the walk
+// cycle of someone 120m away is imperceptible; deleting them is not.
+const ANIM_NEAR = 40; // every frame
+const ANIM_MID = 100; // every 3rd frame
+const ANIM_FAR_EVERY = 10; // beyond that, every 10th
+
 const CHARACTER_URL = 'models/characters/Character_Soldier.gltf';
 
 // The material the kit leaves for team colour. Everything else — skin, boots,
@@ -27,6 +39,12 @@ const TEAM_MATERIAL = 'Character_Main';
 // The character carries every gun in the kit as a child mesh, so "equip" is just
 // deciding which one to show. Weapons with no counterpart borrow the nearest
 // thing rather than leaving empty hands.
+// Third-person guns are limited to the meshes baked inside the character glTF —
+// they're parented to its hand bone, so they can only be things the rig already
+// carries. There are seventeen weapons and eight of these, so anything without an
+// exact match falls back to the nearest thing of its own type. A Bullpup shows as
+// an AK in third person; from ten metres away, across a firefight, nobody is
+// auditing the receiver.
 const HELD_MESH = {
   rifle: 'AK',
   smg: 'SMG',
@@ -37,7 +55,23 @@ const HELD_MESH = {
   lmg: 'ShortCannon',
   knife: 'Knife_1',
 };
-const ALL_HELD = [...new Set(Object.values(HELD_MESH))];
+const HELD_BY_TYPE = {
+  rifle: 'AK',
+  smg: 'SMG',
+  pistol: 'Pistol',
+  shotgun: 'Shotgun',
+  sniper: 'Sniper',
+  lmg: 'ShortCannon',
+  melee: 'Knife_1',
+};
+
+function heldMeshFor(weaponId) {
+  if (HELD_MESH[weaponId]) return HELD_MESH[weaponId];
+  const type = getWeapon(weaponId)?.type;
+  return HELD_BY_TYPE[type] ?? 'AK';
+}
+
+const ALL_HELD = [...new Set([...Object.values(HELD_MESH), ...Object.values(HELD_BY_TYPE)])];
 
 /**
  * Which clip suits a given state. The kit's 17 clips happen to line up almost
@@ -205,7 +239,7 @@ function playClip(character, name, { loop = true } = {}) {
 }
 
 function showHeldWeapon(character, weaponId) {
-  const wanted = HELD_MESH[weaponId];
+  const wanted = heldMeshFor(weaponId);
   if (character.heldName === wanted) return;
   character.heldName = wanted;
   for (const [name, mesh] of character.held) mesh.visible = name === wanted;
@@ -256,6 +290,7 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
       rp.scene.add(figure.group);
       entity = {
         ...figure,
+        animTick: 0,
         label: makeLabel(rp.labelLayer, info?.name ?? '…'),
         team: info?.team ?? null,
         stridePhase: 0,
@@ -298,7 +333,7 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
         entity.group.scale.y = 1;
         // LoopOnce and clamped, so it settles on the floor instead of looping.
         playClip(entity.character, 'Death', { loop: false });
-        entity.character.mixer.update(dt);
+        advanceAnimation(entity, camera, dt);
       } else {
         // Box figure has no clips, so tip it over instead.
         entity.group.rotation.x = Math.min(entity.group.rotation.x + dt * 4.5, Math.PI / 2);
@@ -339,7 +374,7 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
         sprinting: hasFlag(state.flags, FLAG.SPRINT),
         firing: hasFlag(state.flags, FLAG.FIRING),
       }));
-      entity.character.mixer.update(dt);
+      advanceAnimation(entity, camera, dt);
     } else {
       const scaleY = crouched ? PLAYER_CROUCH_HEIGHT / PLAYER_HEIGHT : 1;
       entity.group.scale.y += (scaleY - entity.group.scale.y) * 0.3;
@@ -371,6 +406,29 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
     destroyEntity(rp, entity);
     rp.entities.delete(id);
   }
+}
+
+/**
+ * Step a character's animation, less often the further away it is. `dt` is
+ * accumulated rather than dropped, so a throttled clip still runs at the right
+ * speed — it just updates in coarser steps.
+ */
+function advanceAnimation(entity, camera, dt) {
+  const character = entity.character;
+  if (!character) return;
+
+  entity.animDebt = (entity.animDebt ?? 0) + dt;
+
+  const d = entity.group.position.distanceTo(camera.position);
+  let every = 1;
+  if (d > ANIM_MID) every = ANIM_FAR_EVERY;
+  else if (d > ANIM_NEAR) every = 3;
+
+  entity.animTick = (entity.animTick + 1) % every;
+  if (entity.animTick !== 0) return;
+
+  character.mixer.update(entity.animDebt);
+  entity.animDebt = 0;
 }
 
 const tmpVec = new THREE.Vector3();

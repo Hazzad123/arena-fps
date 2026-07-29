@@ -68,10 +68,59 @@ export const REGEN_PER_SECOND = 35;
 
 // ---------------------------------------------------------------- match flow
 export const ROUND_MS = 180_000; // 3 minutes, as requested
+
+// Gun Game needs longer: eight rungs at a couple of kills each is more than three
+// minutes of work, and a round that ends on the clock with nobody past the rifle
+// doesn't feel like the mode was played at all.
+export const MODE_ROUND_MS = {
+  tdm: ROUND_MS,
+  ffa: ROUND_MS,
+  gungame: 330_000, // 5m30
+  // Survival has no clock — the run ends when everyone is down. A nominal value
+  // keeps the phase machine happy without ever being reached in practice.
+  waves: 3_600_000,
+};
+
+// ------------------------------------------------------------- battle royale
+//
+// The zone closes in phases: hold at the current radius, then shrink to the next
+// over `shrinkMs`, then hold again. Damage outside ramps up so a late-game player
+// caught out cannot simply walk it off, but the first phase is survivable — being
+// slightly late shouldn't be an execution.
+export const BR_ZONE_PHASES = [
+  { holdMs: 45_000, shrinkMs: 40_000, radius: 92, dps: 2 },
+  { holdMs: 30_000, shrinkMs: 35_000, radius: 62, dps: 4 },
+  { holdMs: 25_000, shrinkMs: 30_000, radius: 38, dps: 7 },
+  { holdMs: 20_000, shrinkMs: 25_000, radius: 20, dps: 12 },
+  { holdMs: 20_000, shrinkMs: 20_000, radius: 8, dps: 20 },
+  { holdMs: 0, shrinkMs: 0, radius: 8, dps: 25 },
+];
+export const BR_START_RADIUS = 135;
+export const BR_DROP_MS = 12_000; // grace before the first zone starts moving
+export const BR_LOOT_COUNT = 60; // guns on the ground at the start
+export const BR_LOOT_RADIUS = 1.6; // how close you must be to pick one up
+
+// ---------------------------------------------------------------- health packs
+// Pickups are NOT part of map.solids — you walk over them, you don't bump into
+// them — so they live in their own list on the map and are collected by proximity
+// on the server tick.
+export const HEALTH_PACK_HEAL = 45;
+export const HEALTH_PACK_RADIUS = 1.2; // how close you have to be
+export const HEALTH_PACK_RESPAWN_MS = 20_000;
+
+// ------------------------------------------------------------------- survival
+export const WAVE_BREAK_MS = 6_000; // breathing room between waves
+export const WAVE_FIRST_DELAY_MS = 4_000;
+export const WAVE_MAX_CONCURRENT = 12; // how many enemies can be alive at once
+export const WAVE_BASE_ENEMIES = 4; // wave 1
+export const WAVE_ENEMIES_PER_WAVE = 2;
 export const COUNTDOWN_MS = 5_000;
 export const SCOREBOARD_MS = 15_000;
 export const MIN_PLAYERS_TO_START = 2;
 export const MAX_PLAYERS = 8;
+// Battle royale runs a much bigger lobby on a much bigger map. Any unfilled slot
+// becomes an AI, so a room of two still plays a thirty-player match.
+export const BR_MAX_PLAYERS = 30;
 export const EMPTY_ROOM_TTL_MS = 60_000;
 
 // How long a lobby that already has enough players waits for the stragglers to

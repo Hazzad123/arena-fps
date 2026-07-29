@@ -2,11 +2,38 @@
 //
 // Everything mode-specific lives here so room.js stays a plain state machine.
 
-import { TEAMS, SCORE_LIMIT, MAX_PLAYERS } from '../shared/constants.js';
-import { GUNGAME_LADDER, loadoutForClass } from '../shared/weapons.js';
+import { TEAMS, SCORE_LIMIT, MAX_PLAYERS, BR_MAX_PLAYERS } from '../shared/constants.js';
+import { PRIMARY_IDS, GUNGAME_LADDER, loadoutForPrimary } from '../shared/weapons.js';
 
 export function isTeamMode(mode) {
   return mode === 'tdm';
+}
+
+/**
+ * Modes where team membership decides who can shoot whom, even if the HUD doesn't
+ * show team scores. Survival is co-op: humans are team A, the AI are team B.
+ */
+export function hasSides(mode) {
+  return mode === 'tdm' || mode === 'waves';
+}
+
+export function isSurvival(mode) {
+  return mode === 'waves';
+}
+
+export function isBattleRoyale(mode) {
+  return mode === 'br';
+}
+
+/** How many slots this mode's lobby has. Battle royale is much bigger. */
+export function capacityFor(mode) {
+  return isBattleRoyale(mode) ? BR_MAX_PLAYERS : MAX_PLAYERS;
+}
+
+/** Battle royale is played on one purpose-built map, never the rotation. */
+export function mapForMode(mode, current) {
+  if (isBattleRoyale(mode)) return 'island';
+  return current === 'island' ? 'warehouse' : current;
 }
 
 /**
@@ -14,6 +41,11 @@ export function isTeamMode(mode) {
  * everyone who joins an empty room piles onto team A.
  */
 export function assignTeam(room, player) {
+  // Battle royale is solo: no teams at all, so everyone can shoot everyone.
+  if (isBattleRoyale(room.mode)) return null;
+  // Survival: everyone who joined is on the same side, and the AI are told which
+  // team they're on when they're created.
+  if (isSurvival(room.mode)) return player.isBot ? TEAMS.B : TEAMS.A;
   if (!isTeamMode(room.mode)) return null;
 
   let a = 0;
@@ -54,13 +86,17 @@ export function rebalance(room) {
 }
 
 export function loadoutFor(room, player) {
+  // Battle royale: everyone lands with a pistol and a knife, whatever they picked
+  // in the lobby. Finding a better gun is the mode; handing you your favourite at
+  // the start would remove the reason to loot.
+  if (isBattleRoyale(room.mode)) return ['pistol', 'knife'];
   if (room.mode === 'gungame') {
     const id = GUNGAME_LADDER[Math.min(player.ladderIndex, GUNGAME_LADDER.length - 1)];
     // Only the current rung — that's the whole point of the mode, and it's why
     // Gun Game ignores your class.
     return [id];
   }
-  return loadoutForClass(player.classId);
+  return loadoutForPrimary(player.primaryId);
 }
 
 /** Does the player's own class choice decide their loadout in this mode? */
@@ -69,12 +105,21 @@ export function usesClasses(mode) {
 }
 
 export function spawnPointsFor(room, map, player) {
+  // Survival: humans hold the team-A end, enemies come from everywhere else.
+  if (isSurvival(room.mode)) {
+    return player.isBot ? (map.spawns.ffa ?? map.spawns.B) : (map.spawns.A ?? map.spawns.ffa);
+  }
   if (isTeamMode(room.mode)) return map.spawns[player.team] ?? map.spawns.ffa;
   return map.spawns.ffa;
 }
 
 export function canDamage(room, attacker, victim) {
   if (attacker.id === victim.id) return false;
+  // Any mode with sides protects your own side. Survival relies on this so a
+  // co-op partner can't shoot you in the back.
+  if (hasSides(room.mode) && attacker.team && victim.team && attacker.team === victim.team) {
+    return false;
+  }
   // Friendly fire off. With coworkers, accidental teamkills generate far more
   // friction than they generate interesting decisions.
   if (isTeamMode(room.mode) && attacker.team === victim.team) return false;
@@ -119,6 +164,10 @@ export function onKill(room, killer, victim, weaponId) {
  * until the clock runs out.
  */
 export function checkWin(room) {
+  if (isSurvival(room.mode)) return null;
+  // Battle royale ends when one player is left. Handled by the room, which knows
+  // who is still alive.
+  if (isBattleRoyale(room.mode)) return null;
   if (room.mode === 'gungame') {
     for (const p of room.players.values()) {
       if (p.ladderIndex >= GUNGAME_LADDER.length) {
@@ -150,6 +199,21 @@ export function checkWin(room) {
 
 /** Who won when the clock ran out. */
 export function resultAtTimeUp(room) {
+  if (isBattleRoyale(room.mode)) {
+    // Called when the clock runs out with several alive, which the final circle
+    // makes unlikely but not impossible.
+    let best = null;
+    for (const p of room.players.values()) {
+      if (!p.alive) continue;
+      if (!best || p.kills > best.kills) best = p;
+    }
+    return best
+      ? { reason: 'br', winnerId: best.id, winnerName: best.name }
+      : { reason: 'draw' };
+  }
+  if (isSurvival(room.mode)) {
+    return { reason: 'survival', wave: room.wave?.number ?? 0 };
+  }
   if (isTeamMode(room.mode)) {
     const a = room.teamScores.A ?? 0;
     const b = room.teamScores.B ?? 0;
@@ -174,6 +238,11 @@ export function resultAtTimeUp(room) {
 
 export function describeResult(room, result) {
   if (!result) return 'Round over';
+  if (result.reason === 'br') return `${result.winnerName} is the last one standing`;
+  if (result.reason === 'survival') {
+    const n = result.wave ?? 0;
+    return n <= 1 ? 'Overrun on the first wave' : `Survived ${n - 1} waves`;
+  }
   if (result.reason === 'draw') return 'Draw';
   if (result.winnerTeam) {
     return `Team ${result.winnerTeam} wins`;
@@ -193,3 +262,8 @@ export function resetScores(room) {
 }
 
 export const ROOM_CAPACITY = MAX_PLAYERS;
+
+/** A random class for an AI, so a lobby of bots isn't six identical soldiers. */
+export function randomPrimaryId() {
+  return PRIMARY_IDS[Math.floor(Math.random() * PRIMARY_IDS.length)];
+}

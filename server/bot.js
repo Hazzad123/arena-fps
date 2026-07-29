@@ -20,7 +20,7 @@ import {
 import { C2S, S2C, PHASE, FLAG, encode, decode, decodeSnapshot } from '../shared/protocol.js';
 import { getMap } from '../shared/maps/index.js';
 import { moveAndCollide, hasLineOfSight } from '../shared/collision.js';
-import { getWeapon, fireIntervalMs, CLASS_IDS } from '../shared/weapons.js';
+import { getWeapon, fireIntervalMs, PRIMARY_IDS } from '../shared/weapons.js';
 
 // ------------------------------------------------------------------------ args
 
@@ -109,9 +109,9 @@ class Bot {
         this.send(C2S.HELLO, { name: this.name });
         // Spread the bots across the classes so a bot match exercises every
         // weapon rather than eight assault rifles.
-        const classId = CLASS_IDS[this.index % CLASS_IDS.length];
-        if (args.code) this.send(C2S.JOIN, { code: args.code, classId });
-        else this.send(C2S.QUICKPLAY, { mode: args.mode, classId });
+        const primaryId = PRIMARY_IDS[this.index % PRIMARY_IDS.length];
+        if (args.code) this.send(C2S.JOIN, { code: args.code, primaryId });
+        else this.send(C2S.QUICKPLAY, { mode: args.mode, primaryId });
         resolve();
       });
 

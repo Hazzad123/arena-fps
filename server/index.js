@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 
-import { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, EMPTY_ROOM_TTL_MS } from '../shared/constants.js';
+import { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH } from '../shared/constants.js';
 import { C2S, S2C, PHASE, encode, decode, isValidRoomCode, sanitiseName, MODES } from '../shared/protocol.js';
 import { mapList } from '../shared/maps/index.js';
 import { Room } from './room.js';
@@ -181,7 +181,7 @@ function handleMessage(session, ws, msg) {
         ws.send(encode(S2C.ERROR, { code: 'no-capacity', message: 'Server is full — try again shortly.' }));
         return;
       }
-      joinRoom(session, ws, room, msg.classId);
+      joinRoom(session, ws, room, msg.primaryId);
       return;
     }
 
@@ -201,7 +201,7 @@ function handleMessage(session, ws, msg) {
         return;
       }
       leaveRoom(session);
-      joinRoom(session, ws, room, msg.classId);
+      joinRoom(session, ws, room, msg.primaryId);
       return;
     }
 
@@ -212,12 +212,24 @@ function handleMessage(session, ws, msg) {
         ws.send(encode(S2C.ERROR, { code: 'no-capacity', message: 'Server is full — try again shortly.' }));
         return;
       }
-      joinRoom(session, ws, room, msg.classId);
+      joinRoom(session, ws, room, msg.primaryId);
       return;
     }
 
     case C2S.LEAVE:
       leaveRoom(session);
+      return;
+
+    case C2S.CHAT:
+      if (session.room && session.player) session.room.handleChat(session.player, msg);
+      return;
+
+    case C2S.TAKE_LOOT:
+      if (session.room && session.player) session.room.handleTakeLoot(session.player);
+      return;
+
+    case C2S.SET_BOTS:
+      if (session.room && session.player) session.room.handleSetBots(session.player, msg);
       return;
 
     case C2S.STATE:
@@ -244,8 +256,8 @@ function handleMessage(session, ws, msg) {
       if (session.room && session.player) session.room.handleLobbySet(session.player, msg);
       return;
 
-    case C2S.SETCLASS:
-      if (session.room && session.player) session.room.handleSetClass(session.player, msg);
+    case C2S.SET_PRIMARY:
+      if (session.room && session.player) session.room.handleSetPrimary(session.player, msg);
       return;
 
     case C2S.TO_LOBBY:
@@ -257,12 +269,12 @@ function handleMessage(session, ws, msg) {
   }
 }
 
-function joinRoom(session, ws, room, classId) {
+function joinRoom(session, ws, room, primaryId) {
   session.room = room;
   session.name ??= sanitiseName(null);
   // The class arrives with the join because joining a live match spawns you on
   // the spot — a separate message afterwards would always be one life too late.
-  session.player = room.addPlayer({ id: session.id, name: session.name, ws, classId });
+  session.player = room.addPlayer({ id: session.id, name: session.name, ws, primaryId });
 }
 
 function leaveRoom(session) {
