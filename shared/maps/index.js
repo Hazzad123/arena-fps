@@ -4,11 +4,14 @@ import rooftops from './rooftops.js';
 import alley from './alley.js';
 import practice from './practice.js';
 import island from './island.js';
+import courtyard from './courtyard.js';
+import foundry from './foundry.js';
+import switchyard from './switchyard.js';
 
-// The three competitive maps, in rotation order.
-export const ROTATION = ['warehouse', 'rooftops', 'alley'];
+// Competitive maps, in rotation order.
+export const ROTATION = ['warehouse', 'rooftops', 'alley', 'courtyard', 'foundry', 'switchyard'];
 
-const RAW = { warehouse, rooftops, alley, practice, island };
+const RAW = { warehouse, rooftops, alley, courtyard, foundry, switchyard, practice, island };
 
 // Boxes are compiled to min/max form once, on first request, and cached. Both
 // the client and the server go through here so neither can end up with a

@@ -146,7 +146,7 @@ export default {
   // Health pickups. Not solids — you walk over them.
   healthPacks: [
     // Health, out in the open on purpose: taking one means leaving cover.
-    [0, 0, 0],            // on the mid platform, the most contested spot
+    [0, 1.8, 0],          // on the mid platform, the most contested spot
     [-25.5, 4.9, 0],      // west catwalk
     [25.5, 4.9, 0],       // east catwalk
     [-20, 0, -14],

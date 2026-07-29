@@ -73,6 +73,22 @@ export function playerOverlapsAny(pos, height, radius, boxes) {
   return false;
 }
 
+/**
+ * Cap horizontal velocity without touching jumps or falls.
+ *
+ * Projection-based air acceleration is intentionally responsive, but without a
+ * final magnitude cap it can add speed sideways while a wall removes the inward
+ * component. Repeating a sprint-jump into angled cover then ratchets the player
+ * above the sprint limit.
+ */
+export function clampHorizontalSpeed(state, maxSpeed) {
+  const speed = Math.hypot(state.vel[0], state.vel[2]);
+  if (!Number.isFinite(maxSpeed) || maxSpeed < 0 || speed <= maxSpeed || speed < EPS) return;
+  const scale = maxSpeed / speed;
+  state.vel[0] *= scale;
+  state.vel[2] *= scale;
+}
+
 // ---------------------------------------------------------------------------
 // Movement
 //

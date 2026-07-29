@@ -21,7 +21,8 @@ import { hasLineOfSight } from '@shared/collision.js';
 const BASE_RANGE = 46;
 function rangeFor(map) {
   const span = Math.max(map.bounds.max[0] - map.bounds.min[0], map.bounds.max[2] - map.bounds.min[2]);
-  return Math.min(150, Math.max(BASE_RANGE, span * 0.42));
+  const cap = map.battleRoyale ? 320 : 150;
+  return Math.min(cap, Math.max(BASE_RANGE, span * 0.42));
 }
 
 // How long an enemy's gunfire stays on the radar. Long enough to turn and look,
@@ -152,9 +153,11 @@ export function drawMinimap(minimap, { map, player, states, myId, mode, myTeam, 
   ctx.fillRect(0, 0, size, size);
 
   // Rotate so the direction you're facing is always up — much easier to read
-  // than a fixed-north radar when you're turning constantly.
+  // than a fixed-north radar when you're turning constantly. Canvas Y points
+  // down and world -Z is forward at yaw zero, so the radar rotates by the
+  // positive player yaw. Using the inverse angle mirrors every turn.
   ctx.translate(half, half);
-  ctx.rotate(-player.yaw);
+  ctx.rotate(player.yaw);
 
   // Blit the baked map, scaled from its own resolution to radar pixels and
   // offset so the player sits at the centre.

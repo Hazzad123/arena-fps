@@ -54,6 +54,14 @@ function rollGun() {
   return { id, tier: tier.name };
 }
 
+function tierForGun(weaponId) {
+  return LOOT_TIERS.find((tier) => tier.guns.includes(weaponId))?.name ?? 'common';
+}
+
+function lootPayload(item) {
+  return { i: item.index, p: item.pos, w: item.weaponId, t: item.tier };
+}
+
 /**
  * Fresh battle-royale state. The zone starts centred on the map and only begins
  * closing after the drop grace, so nobody is taking damage while they're still
@@ -95,7 +103,7 @@ export function lootList(br) {
   const out = [];
   for (const item of br.loot.values()) {
     if (item.taken) continue;
-    out.push({ i: item.index, p: item.pos, w: item.weaponId, t: item.tier });
+    out.push(lootPayload(item));
   }
   return out;
 }
@@ -217,11 +225,17 @@ export function aiConsiderLoot(room, br, bot) {
     if (d > BR_LOOT_RADIUS + 1.4) continue;
     if (gunScore(item.weaponId) <= holdingScore) continue;
 
-    item.taken = true;
+    const dropped = holding;
     bot.primaryId = item.weaponId;
     bot.inventory = [item.weaponId, 'pistol', 'knife'];
     bot.weapon = item.weaponId;
-    room.broadcast(S2C.LOOT, { taken: [item.index] });
+    // Swap, don't delete: whatever the bot was carrying remains available to
+    // the rest of the match at the exact place the exchange happened.
+    item.weaponId = dropped;
+    item.tier = tierForGun(dropped);
+    item.pos = [bot.pos[0], bot.pos[1], bot.pos[2]];
+    item.taken = false;
+    room.broadcast(S2C.LOOT, { upsert: [lootPayload(item)] });
     return item;
   }
   return null;
@@ -240,18 +254,23 @@ export function aiZoneWaypoint(br, bot) {
   const dz = bot.pos[2] - z.centre[1];
   const dist = Math.hypot(dx, dz);
 
-  // Still holding the starting pistol: go and find something, as long as it's
-  // inside the circle.
-  if (bot.inventory?.[0] === 'pistol') {
+  // Seek a meaningful upgrade, not merely the nearest object. This lets bots
+  // replace a weak common later and stops them walking past an epic rifle just
+  // because they already found an SMG.
+  const holdingScore = gunScore(bot.inventory?.[0] ?? 'pistol');
+  if (z.phase < 3) {
     let best = null;
     for (const item of br.loot.values()) {
       if (item.taken) continue;
+      const improvement = gunScore(item.weaponId) - holdingScore;
+      if (improvement <= holdingScore * 0.08) continue;
       const ix = item.pos[0] - z.centre[0];
       const iz = item.pos[2] - z.centre[1];
       if (Math.hypot(ix, iz) > z.radius * 0.9) continue; // don't run into the wall
       const d = Math.hypot(item.pos[0] - bot.pos[0], item.pos[2] - bot.pos[2]);
-      if (d > 70) continue;
-      if (!best || d < best.d) best = { d, pos: item.pos };
+      if (d > 130) continue;
+      const utility = improvement / Math.max(8, d);
+      if (!best || utility > best.utility) best = { utility, pos: item.pos };
     }
     if (best) return [best.pos[0], bot.pos[1], best.pos[2]];
   }
@@ -288,19 +307,26 @@ export function takeLoot(room, br, player) {
   if (!best) return null;
 
   const item = best.item;
-  item.taken = true;
+  const dropped = player.inventory?.[0] ?? 'pistol';
+  const pickedId = item.weaponId;
+  const pickedTier = item.tier;
 
-  // The gun on the ground becomes your primary; the old one is gone.
+  // The gun on the ground becomes your primary, and the old primary takes its
+  // place in the world. A loot route therefore evolves instead of being erased.
   player.primaryId = item.weaponId;
   player.inventory = [item.weaponId, 'pistol', 'knife'];
   player.weapon = item.weaponId;
 
-  room.broadcast(S2C.LOOT, { taken: [item.index] });
+  item.weaponId = dropped;
+  item.tier = tierForGun(dropped);
+  item.pos = [player.pos[0], player.pos[1], player.pos[2]];
+  item.taken = false;
+  room.broadcast(S2C.LOOT, { upsert: [lootPayload(item)] });
   room.sendTo(player, S2C.LOADOUT, {
     inventory: player.inventory,
     weapon: player.weapon,
-    picked: getWeapon(item.weaponId).name,
-    tier: item.tier,
+    picked: getWeapon(pickedId).name,
+    tier: pickedTier,
   });
   return item;
 }

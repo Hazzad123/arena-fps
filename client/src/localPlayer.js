@@ -30,8 +30,12 @@ import {
   MAX_HEALTH,
   FALL_DAMAGE_MIN_SPEED,
   FALL_DAMAGE_PER_SPEED,
+  PARACHUTE_FALL_SPEED,
+  PARACHUTE_GLIDE_SPEED,
 } from '@shared/constants.js';
-import { moveAndCollide, playerOverlapsAny, pushOutOfSolids } from '@shared/collision.js';
+import {
+  clampHorizontalSpeed, moveAndCollide, playerOverlapsAny, pushOutOfSolids,
+} from '@shared/collision.js';
 import { getWeapon, fireIntervalMs } from '@shared/weapons.js';
 import { input, moveAxes, consumeLook, consumePressed } from './input.js';
 
@@ -49,6 +53,7 @@ export function createLocalPlayer() {
 
     health: MAX_HEALTH,
     alive: true,
+    parachuting: false,
 
     // Weapons
     inventory: ['rifle', 'pistol', 'knife'],
@@ -96,6 +101,7 @@ export function spawnAt(p, point, solids, yaw = 0) {
   p.height = PLAYER_HEIGHT;
   p.health = MAX_HEALTH;
   p.alive = true;
+  p.parachuting = false;
   p.recoilPitch = 0;
   p.recoilYaw = 0;
   // Belt and braces against an authoring slip putting a spawn in a wall.
@@ -140,12 +146,41 @@ export function updateLocalPlayer(p, dt, solids, opts = {}) {
   updateAds(p, dt, weapon);
   recoverRecoil(p, dt, weapon);
 
-  if (!p.alive || frozen) {
+  if (frozen) {
+    // Countdown players are already at their real spawn (or hanging beneath
+    // their BR canopy). Hold that exact presentation until "Go".
+    p.vel[0] = 0;
+    p.vel[1] = 0;
+    p.vel[2] = 0;
+    return { fallDamage: 0, died: false };
+  }
+
+  if (!p.alive) {
     // Still integrate gravity so bodies settle rather than hanging in the air.
     p.vel[0] = 0;
     p.vel[2] = 0;
     p.vel[1] = Math.max(-MAX_FALL_SPEED, p.vel[1] + GRAVITY * dt);
     moveAndCollide(p, dt, solids, p.height, p.radius);
+    return { fallDamage: 0, died: false };
+  }
+
+  if (p.parachuting) {
+    const axes = moveAxes();
+    const sin = Math.sin(p.yaw);
+    const cos = Math.cos(p.yaw);
+    const wishX = axes.x * cos - axes.z * sin;
+    const wishZ = -axes.x * sin - axes.z * cos;
+    const wishLen = Math.hypot(wishX, wishZ);
+    p.vel[0] = wishLen > 0 ? (wishX / wishLen) * PARACHUTE_GLIDE_SPEED : 0;
+    p.vel[2] = wishLen > 0 ? (wishZ / wishLen) * PARACHUTE_GLIDE_SPEED : 0;
+    p.vel[1] = Math.max(-PARACHUTE_FALL_SPEED, p.vel[1] + GRAVITY * dt);
+    const result = moveAndCollide(p, dt, solids, p.height, p.radius);
+    if (result.landed && p.onGround) {
+      p.parachuting = false;
+      p.vel[0] *= 0.35;
+      p.vel[2] *= 0.35;
+    }
+    p.bobAmount = 0;
     return { fallDamage: 0, died: false };
   }
 
@@ -167,6 +202,10 @@ export function updateLocalPlayer(p, dt, solids, opts = {}) {
 
   applyFriction(p, dt);
   accelerate(p, dirX, dirZ, wishSpeed, dt);
+  // Air acceleration is projection-based for responsive steering. Clamp the
+  // resulting magnitude so a wall cannot strip the inward velocity while each
+  // jump adds more sideways speed.
+  clampHorizontalSpeed(p, SPRINT_SPEED * weapon.moveMult);
 
   // ---- vertical ----
   if (p.onGround && input.jump && !p.crouching) {

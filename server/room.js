@@ -13,14 +13,16 @@ import {
   TEAMS, HEALTH_PACK_HEAL, HEALTH_PACK_RADIUS, HEALTH_PACK_RESPAWN_MS,
   WAVE_BREAK_MS, WAVE_FIRST_DELAY_MS, WAVE_MAX_CONCURRENT,
   WAVE_BASE_ENEMIES, WAVE_ENEMIES_PER_WAVE,
-  EMOTE_COOLDOWN_MS,
+  EMOTE_COOLDOWN_MS, BR_DROP_HEIGHT, BR_VICTORY_MS, BR_SCOREBOARD_MS,
 } from '../shared/constants.js';
 import {
   S2C, PHASE, FLAG, MODES, EMOTES, encode, encodeSnapshot, sanitiseChat,
 } from '../shared/protocol.js';
 import { getMap, nextMap, ROTATION } from '../shared/maps/index.js';
 import { PRIMARY_IDS, getPrimary } from '../shared/weapons.js';
-import { pushOutOfSolids, playerOverlapsAny, hasLineOfSight } from '../shared/collision.js';
+import {
+  pushOutOfSolids, playerOverlapsAny, hasLineOfSight, raycastBoxes,
+} from '../shared/collision.js';
 import * as modes from './modes.js';
 import { createAiPlayer, stepAi, aiName } from './ai.js';
 import {
@@ -66,6 +68,7 @@ export class Room {
     this.empty = false;
     this.closed = false;
     this.lastResult = null;
+    this.roundPrepared = false;
 
     // Lobby: whoever got here first picks the mode and the map and can force the
     // start; everyone readies up individually.
@@ -196,8 +199,11 @@ export class Room {
 
     this.broadcastRoster();
 
-    // A match already in progress: drop them straight in.
-    if (this.phase === PHASE.LIVE) this.spawn(player);
+    // A prepared countdown already has everybody at their start position. A
+    // late joiner belongs there too, not at [0,0,0] falling under the map.
+    if (this.phase === PHASE.LIVE || (this.phase === PHASE.COUNTDOWN && this.roundPrepared)) {
+      this.spawn(player);
+    }
     else this.evaluateLobby();
 
     return player;
@@ -417,6 +423,7 @@ export class Room {
   startCountdown() {
     this.graceEndsAt = 0;
     this.lastResult = null;
+    this.prepareRound();
     this.setPhase(PHASE.COUNTDOWN, DURATION.countdown);
   }
 
@@ -498,7 +505,16 @@ export class Room {
     if (changed) this.broadcastLobby();
   }
 
-  beginRound() {
+  /**
+   * Put the next round in a fully renderable state before the countdown appears.
+   *
+   * Previously players entered the match screen alive=false at [0,0,0], so the
+   * client integrated a falling body for five seconds and could show stale kill
+   * state from the previous round. Preparing first makes "Get ready" show the
+   * actual map, actual spawn, actual loot and (in BR) the actual aircraft drop.
+   */
+  prepareRound() {
+    if (this.roundPrepared) return;
     modes.resetScores(this);
 
     // Wipe the previous round's mode state before installing this round's.
@@ -526,14 +542,26 @@ export class Room {
     if (modes.isSurvival(this.mode)) this.startSurvival();
     if (modes.isBattleRoyale(this.mode)) this.startBattleRoyale();
     this.broadcastRoster();
+    this.roundPrepared = true;
+  }
+
+  beginRound() {
+    this.prepareRound();
     this.setPhase(PHASE.LIVE, this.roundMs());
   }
 
   endRound(result) {
     this.lastResult = result;
+    this.roundPrepared = false;
     this.regroupRequests.clear();
-    for (const p of this.players.values()) p.alive = false;
-    this.setPhase(PHASE.SCOREBOARD, DURATION.scoreboard);
+    for (const p of this.players.values()) {
+      p.alive = false;
+      p.parachuting = false;
+    }
+    const duration = modes.isBattleRoyale(this.mode)
+      ? Math.max(DURATION.scoreboard, BR_SCOREBOARD_MS)
+      : DURATION.scoreboard;
+    this.setPhase(PHASE.SCOREBOARD, duration);
   }
 
   /**
@@ -591,6 +619,18 @@ export class Room {
   tickBattleRoyale(now) {
     if (!this.br) return;
 
+    if (this.br.winnerId) {
+      if (now >= this.br.endingAt) {
+        const winner = this.players.get(this.br.winnerId);
+        this.endRound({
+          reason: 'br',
+          winnerId: this.br.winnerId,
+          winnerName: winner?.name ?? 'Survivor',
+        });
+      }
+      return;
+    }
+
     if (tickZone(this, this.br, now)) {
       // Only when it actually moved: the zone spends most of its time holding.
       this.broadcast(S2C.ZONE, zonePayload(this.br, now));
@@ -600,8 +640,13 @@ export class Room {
     const survivor = soleSurvivor(this);
     if (survivor && this.players.size > 1) {
       this.br.winnerId = survivor.id;
+      this.br.endingAt = now + BR_VICTORY_MS;
       survivor.score += 10;
-      this.endRound({ reason: 'br', winnerId: survivor.id, winnerName: survivor.name });
+      this.broadcast(S2C.BR_WIN, {
+        winnerId: survivor.id,
+        winnerName: survivor.name,
+        ms: BR_VICTORY_MS,
+      });
     }
   }
 
@@ -1077,11 +1122,17 @@ export class Room {
     player.weapon = player.inventory[0];
 
     const point = this.chooseSpawn(player);
-    player.pos = [point[0], point[1], point[2]];
+    const parachuting = modes.isBattleRoyale(this.mode);
+    player.pos = [
+      point[0],
+      parachuting ? Math.max(point[1] + BR_DROP_HEIGHT, BR_DROP_HEIGHT) : point[1],
+      point[2],
+    ];
     player.health = MAX_HEALTH;
     player.alive = true;
     player.crouching = false;
-    player.flags = 0;
+    player.parachuting = parachuting;
+    player.flags = parachuting ? FLAG.PARACHUTE | FLAG.AIRBORNE : 0;
     player.respawnAt = 0;
     player.lastDamageAt = 0;
     player.spawnProtectedUntil = Date.now() + SPAWN_PROTECTION_MS;
@@ -1095,7 +1146,25 @@ export class Room {
     const b = this.map.bounds;
     const cx = (b.min[0] + b.max[0]) / 2;
     const cz = (b.min[2] + b.max[2]) / 2;
-    player.yaw = Math.atan2(-(cx - player.pos[0]), -(cz - player.pos[2]));
+    const centreYaw = Math.atan2(-(cx - player.pos[0]), -(cz - player.pos[2]));
+    // "Face the centre" is a useful default until a spawn sits behind deliberate
+    // lane cover, at which point it means the first frame is a wall. Probe a few
+    // nearby headings and retain the most open one, mildly preferring centre.
+    let bestYaw = centreYaw;
+    let bestView = -Infinity;
+    const eye = [player.pos[0], player.pos[1] + PLAYER_HEIGHT - 0.15, player.pos[2]];
+    for (const offset of [0, -Math.PI / 4, Math.PI / 4, -Math.PI / 2, Math.PI / 2, Math.PI]) {
+      const yaw = centreYaw + offset;
+      const dir = [-Math.sin(yaw), 0, -Math.cos(yaw)];
+      const wall = raycastBoxes(eye, dir, this.map.solids, 14);
+      const clearance = wall?.t ?? 14;
+      const viewScore = clearance - Math.abs(offset) * 0.18;
+      if (viewScore > bestView) {
+        bestView = viewScore;
+        bestYaw = yaw;
+      }
+    }
+    player.yaw = bestYaw;
     player.pitch = 0;
 
     this.sendTo(player, S2C.RESPAWN, {
@@ -1105,6 +1174,7 @@ export class Room {
       inventory: player.inventory,
       weapon: player.weapon,
       protectedMs: SPAWN_PROTECTION_MS,
+      parachuting,
     });
   }
 
@@ -1127,6 +1197,18 @@ export class Room {
     player.yaw = result.yaw;
     player.pitch = result.pitch;
     player.flags = msg.f | 0;
+    const wasParachuting = !!player.parachuting;
+    if (player.parachuting) {
+      // The client lowers the canopy on first ground contact. Never allow a
+      // packet to reopen it after landing.
+      player.parachuting = (player.flags & FLAG.PARACHUTE) !== 0;
+      if (!player.parachuting) player.flags &= ~FLAG.PARACHUTE;
+    } else {
+      player.flags &= ~FLAG.PARACHUTE;
+    }
+    if (wasParachuting && !player.parachuting) {
+      player.spawnProtectedUntil = now + 2000;
+    }
     player.crouching = (player.flags & FLAG.CROUCH) !== 0;
 
     // Fall damage and the void are reported by the client but applied here.
@@ -1170,7 +1252,7 @@ export class Room {
   }
 
   handleShoot(player, msg) {
-    if (this.phase !== PHASE.LIVE || !player.alive) return;
+    if (this.phase !== PHASE.LIVE || !player.alive || player.parachuting) return;
 
     const weaponId = msg.w;
     if (!player.inventory.includes(weaponId)) return;
@@ -1340,7 +1422,7 @@ export class Room {
 
           if (!regroup && this.humanCount() >= this.minPlayers()) {
             this.lastResult = null;
-            this.setPhase(PHASE.COUNTDOWN, DURATION.countdown);
+            this.startCountdown();
           } else {
             // Somebody asked to regroup, or there aren't enough people for
             // another round. Either way: back to the lobby to sort it out.

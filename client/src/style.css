@@ -395,9 +395,7 @@ select:focus {
 }
 
 /* ======================== class + gun pickers ======================== */
-/* One component, three homes: the lobby, the pause menu and the death screen.
-   Every entry carries its number key because on the death screen the pointer is
-   still locked and the keyboard is the only way in. */
+/* One component, three homes: the lobby, the pause menu and the death screen. */
 
 .class-picker,
 .gun-picker {
@@ -1339,10 +1337,8 @@ button.wide {
 #respawn-class {
   margin-top: 1.2rem;
   width: min(90vw, 460px);
-  /* The HUD is click-through, but these are real buttons. While the pointer is
-     locked there's no cursor to click them with and the number keys are the way
-     in; if the lock is lost while you're dead, they should still work rather than
-     look like buttons and do nothing. */
+  /* The HUD is click-through, but death deliberately releases pointer lock so
+     these real buttons can be used immediately. */
   pointer-events: auto;
 }
 #respawn-class .label {
@@ -1353,6 +1349,43 @@ button.wide {
    rather than the panel's. */
 #respawn-class .pick {
   background: rgba(20, 23, 30, 0.92);
+}
+#respawn.spectating {
+  justify-content: flex-start;
+  padding-top: 8vh;
+  background: linear-gradient(to bottom, rgba(8, 9, 12, 0.58), transparent 45%);
+  pointer-events: none;
+}
+#respawn.spectating .big {
+  font-size: 1.5rem;
+}
+#spectator {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.7rem;
+  pointer-events: auto;
+}
+#spectator > div {
+  display: grid;
+  min-width: 12rem;
+  text-align: center;
+  gap: 0.1rem;
+}
+#spectator span {
+  color: var(--muted);
+  font: 0.68rem var(--mono);
+  letter-spacing: 0.14em;
+}
+#spectator b {
+  font-size: 1rem;
+}
+#spectator button {
+  width: 2.3rem;
+  height: 2.3rem;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1.4rem;
 }
 
 #scoreboard {

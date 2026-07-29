@@ -12,11 +12,11 @@ import { getMap, MAP_IDS, ROTATION, nextMap, mapList } from '../shared/maps/inde
 import { playerOverlapsAny, raycastBoxes, pushOutOfSolids } from '../shared/collision.js';
 import { PLAYER_HEIGHT as H, PLAYER_RADIUS as R, MAX_PLAYERS } from '../shared/constants.js';
 
-test('rotation contains the three competitive maps and cycles', () => {
-  assert.deepEqual(ROTATION, ['warehouse', 'rooftops', 'alley']);
+test('rotation contains all six competitive maps and cycles', () => {
+  assert.deepEqual(ROTATION, ['warehouse', 'rooftops', 'alley', 'courtyard', 'foundry', 'switchyard']);
   assert.equal(nextMap('warehouse'), 'rooftops');
-  assert.equal(nextMap('alley'), 'warehouse', 'rotation should wrap');
-  assert.equal(mapList().length, 3);
+  assert.equal(nextMap('switchyard'), 'warehouse', 'rotation should wrap');
+  assert.equal(mapList().length, 6);
 });
 
 test('the practice range is marked single player and is not in rotation', () => {

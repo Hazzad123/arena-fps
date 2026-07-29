@@ -8,12 +8,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { Room } from '../server/room.js';
+import { stepAi } from '../server/ai.js';
 import { PHASE, S2C } from '../shared/protocol.js';
 import {
-  MAX_HEALTH, PLAYER_HEIGHT, PLAYER_RADIUS, HEALTH_PACK_RESPAWN_MS,
+  MAX_HEALTH, PLAYER_HEIGHT, PLAYER_RADIUS, HEALTH_PACK_RESPAWN_MS, BR_VICTORY_MS,
 } from '../shared/constants.js';
-import { playerOverlapsAny } from '../shared/collision.js';
-import { getMap } from '../shared/maps/index.js';
+import { playerOverlapsAny, raycastBoxes } from '../shared/collision.js';
+import { getMap, MAP_IDS } from '../shared/maps/index.js';
 
 // The room reads Date.now() for everything time-based: spawn protection, respawn
 // timers, weapon cadence, AI reaction. Ticking in a tight loop leaves the wall
@@ -119,6 +120,29 @@ test('AI move, and stay out of walls while doing it', () => {
       `${bot.name} position went non-finite`);
   }
   assert.ok(moved >= 3, `expected most bots to have walked somewhere, only ${moved}/${bots.length} did`);
+  room.dispose();
+  restoreClock();
+});
+
+test('AI probe lethal ledges instead of walking off Rooftops', () => {
+  const room = aiRoom(1);
+  room.mapId = 'rooftops';
+  room.map = getMap('rooftops');
+  const bot = [...room.players.values()][0];
+  bot.pos = [0, 0, -19.2]; // inner edge of the south roof
+  bot.ai.vel = [0, 0, 0];
+  bot.ai.onGround = true;
+  bot.ai.waypoint = null;
+  room.aiWaypointHint = () => [0, 0, 0]; // deliberately points across the void
+
+  for (let i = 0; i < 300; i++) {
+    fakeClock += TICK_MS;
+    stepAi(room, bot, TICK_MS / 1000, fakeClock);
+  }
+
+  assert.ok(bot.pos[1] > -1, `bot fell to y=${bot.pos[1]}`);
+  assert.ok(bot.pos[2] <= -18, `bot crossed the unsupported roof edge at z=${bot.pos[2]}`);
+  assert.ok(bot.alive);
   room.dispose();
   restoreClock();
 });
@@ -282,7 +306,7 @@ test('host can add and remove bots in a normal lobby', () => {
 // ------------------------------------------------------------- health packs
 
 test('every map carries health packs, and none sits inside geometry', () => {
-  for (const id of ['warehouse', 'rooftops', 'alley', 'practice']) {
+  for (const id of MAP_IDS) {
     const map = getMap(id);
     assert.ok(map.healthPacks.length > 0, `${id} has no health packs`);
     for (const pack of map.healthPacks) {
@@ -293,6 +317,13 @@ test('every map carries health packs, and none sits inside geometry', () => {
         pack.pos.every(Number.isFinite),
         `${id}: pack ${pack.index} has a bad position`,
       );
+      const floor = raycastBoxes(
+        [pack.pos[0], pack.pos[1] + 0.2, pack.pos[2]],
+        [0, -1, 0],
+        map.solids,
+        1,
+      );
+      assert.ok(floor && floor.t < 0.35, `${id}: pack ${pack.index} is not grounded`);
     }
   }
 });
@@ -406,11 +437,14 @@ test('battle royale has ground loot, and picking it up changes your gun', () => 
   assert.ok(items.length > 20, `expected plenty of loot, got ${items.length}`);
 
   const item = items[0];
+  const pickedId = item.weaponId;
   human.pos = [...item.pos];
   room.handleTakeLoot(human);
 
-  assert.ok(item.taken, 'the item should be marked taken');
-  assert.equal(human.inventory[0], item.weaponId, 'it should be in your hands');
+  assert.equal(human.inventory[0], pickedId, 'the ground weapon should be in your hands');
+  assert.equal(item.taken, false, 'the dropped gun should remain available');
+  assert.equal(item.weaponId, 'pistol', 'your old held gun should replace the pickup');
+  assert.deepEqual(item.pos, human.pos, 'the dropped gun should land at the exchange');
   assert.equal(human.inventory[1], 'pistol', 'the sidearm survives a pickup');
   assert.equal(human.inventory[2], 'knife', 'and so does the knife');
   room.dispose();
@@ -488,7 +522,7 @@ test('the zone closes and hurts whoever is outside it', () => {
   const first = room.br.zone.radius;
 
   // Park well outside any circle the zone will ever be.
-  human.pos = [125, 0, 125];
+  human.pos = [350, 0, 350];
   human.health = MAX_HEALTH;
 
   // Run past the drop grace and into the first shrink.
@@ -509,7 +543,7 @@ test('the last player standing wins', () => {
     if (p.id === human.id) continue;
     room.applyDamage(p, human, 999, 'rifle');
   }
-  ticks(room, 3);
+  ticks(room, Math.ceil(BR_VICTORY_MS / TICK_MS) + 4);
   assert.equal(room.phase, PHASE.SCOREBOARD, 'the match should be over');
   assert.equal(room.br.winnerId, human.id, 'and the survivor should have won it');
   room.dispose();

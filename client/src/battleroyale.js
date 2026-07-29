@@ -61,8 +61,23 @@ export function clearBattleRoyale(br) {
 export function setLoot(br, items) {
   for (const e of br.loot.values()) br.scene.remove(e.group);
   br.loot.clear();
+  upsertLoot(br, items);
+}
 
+/** Add or replace ground loot. Replacements are the gun another player dropped. */
+export function upsertLoot(br, items) {
   for (const item of items ?? []) {
+    const previous = br.loot.get(item.i);
+    if (previous) {
+      br.scene.remove(previous.group);
+      previous.group.traverse((o) => {
+        if (o.isMesh) {
+          o.geometry.dispose();
+          o.material.dispose();
+        }
+      });
+    }
+
     const group = new THREE.Group();
     group.position.set(item.p[0], item.p[1], item.p[2]);
 

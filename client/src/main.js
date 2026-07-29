@@ -7,7 +7,7 @@
 import * as THREE from 'three';
 import {
   PHYSICS_DT, MIN_FOV, MAX_FOV, TEAMS, RESPAWN_DELAY_MS, MAX_PLAYERS, BARREL_RADIUS,
-  BR_LOOT_RADIUS, EMOTE_COOLDOWN_MS, PITCH_LIMIT,
+  BR_LOOT_RADIUS, EMOTE_COOLDOWN_MS, PITCH_LIMIT, PLAYER_HEIGHT,
 } from '@shared/constants.js';
 import { getMap, mapList } from '@shared/maps/index.js';
 import {
@@ -15,7 +15,7 @@ import {
   WEAPON_TYPES, weaponsOfType,
 } from '@shared/weapons.js';
 import { raycastBoxes, raycastPlayers } from '@shared/collision.js';
-import { C2S, S2C, PHASE, FLAG, MODE_NAMES } from '@shared/protocol.js';
+import { C2S, S2C, PHASE, FLAG, MODE_NAMES, hasFlag } from '@shared/protocol.js';
 
 import { settings, saveSettings, ensureNickname } from './settings.js';
 import {
@@ -55,7 +55,7 @@ import {
   chatIsOpen, setTeamChatAvailable,
 } from './chat.js';
 import {
-  createBattleRoyale, setZone, setLoot, removeLoot, nearestLoot,
+  createBattleRoyale, setZone, setLoot, upsertLoot, removeLoot, nearestLoot,
   updateBattleRoyale, clearBattleRoyale, isOutsideZone,
 } from './battleroyale.js';
 
@@ -140,6 +140,8 @@ const app = {
   lobbyNoticeTimer: null,
   lockCheckTimer: null,
   lastEmoteAt: -Infinity,
+  spectatorTargetId: null,
+  spectatorStep: 0,
   // Our own class. The server holds the authoritative copy; this is what the
   // pickers highlight, and it survives across sessions via settings.
   myGun: getPrimary(settings.primaryId),
@@ -158,8 +160,16 @@ for (const id of [
   'pause', 'pause-note', 'pause-class', 'pause-class-picker', 'pause-guns',
   'pause-gun-picker', 'pause-settings', 'btn-resume', 'btn-quit', 'btn-to-lobby',
   'p-sens', 'p-sens-val', 'p-fov', 'p-fov-val', 'p-vol', 'p-vol-val', 'p-invert-y',
-  'respawn-class', 'respawn-class-picker',
+  'respawn', 'respawn-class', 'respawn-class-picker',
+  'spectator', 'spectator-name', 'spectator-prev', 'spectator-next',
 ]) dom[id] = document.getElementById(id);
+
+dom['spectator-prev'].addEventListener('click', () => {
+  app.spectatorStep = -1;
+});
+dom['spectator-next'].addEventListener('click', () => {
+  app.spectatorStep = 1;
+});
 
 // The host's map picker offers exactly the rotation — the practice range isn't a
 // multiplayer map.
@@ -254,7 +264,7 @@ dom['btn-practice'].addEventListener('click', () => {
   startPractice();
 });
 
-dom['btn-quickplay'].addEventListener('click', () => enterMultiplayer(C2S.QUICKPLAY, {}));
+dom['btn-quickplay'].addEventListener('click', () => enterMultiplayer(C2S.QUICKPLAY, { mode: 'br' }));
 dom['btn-create'].addEventListener('click', () =>
   enterMultiplayer(C2S.CREATE, { mode: dom['mode-select'].value }));
 dom['btn-join'].addEventListener('click', joinByCode);
@@ -348,6 +358,7 @@ function enterLobby() {
   dom.lobby.classList.remove('hidden');
   hud.showHud(false);
   hud.showRespawn(false);
+  app.spectatorTargetId = null;
   hud.showResults(false);
   // A round can end while the pause menu is open; the lobby has its own buttons.
   showPause(false);
@@ -402,9 +413,7 @@ function leaveToMenu() {
 // ---------------------------------------------------------------- pickers
 //
 // One builder for the class picker, used in three places: the lobby, the pause
-// menu and the death screen. Every entry shows its number key, because on the
-// death screen the pointer is still locked to the canvas and the keyboard is the
-// only way to choose.
+// menu and the death screen.
 
 const GUN_PICKERS = ['lobby-class-picker', 'pause-class-picker', 'respawn-class-picker'];
 
@@ -603,7 +612,7 @@ function grabPointer() {
   clearTimeout(app.lockCheckTimer);
   app.lockCheckTimer = setTimeout(() => {
     const inGame = app.screen === 'practice' || app.screen === 'match';
-    if (inGame && !input.locked) showPause(true);
+    if (inGame && !input.locked && (app.screen !== 'match' || player.alive)) showPause(true);
   }, 600);
 }
 
@@ -947,11 +956,16 @@ net.on(connection, S2C.PHASE, (msg) => {
 net.on(connection, S2C.RESPAWN, (msg) => {
   setLoadout(player, msg.inventory ?? player.inventory);
   spawnAt(player, msg.pos, app.map.solids, msg.yaw ?? 0);
+  player.parachuting = !!msg.parachuting;
   player.health = msg.health;
   setViewWeapon(weaponView, player.inventory[player.slotIndex]);
   hud.showRespawn(false);
   app.deathAt = 0;
   app.placed = 0;
+  app.spectatorTargetId = null;
+  // Death releases the mouse for the loadout picker. Take it back when play
+  // resumes; if the browser requires another click, grabPointer exposes Resume.
+  grabPointer();
 });
 
 net.on(connection, 'selfstate', (state) => {
@@ -1019,6 +1033,11 @@ net.on(connection, S2C.KILL, (msg) => {
     app.deathAt = performance.now();
     app.killedBy = msg.killerName ?? '';
     app.placed = msg.placed || 0;
+    app.spectatorTargetId = msg.killer && msg.killer !== connection.myId ? msg.killer : null;
+    // A visible cursor makes the death-screen gun cards immediately clickable.
+    // Suppress the normal pause overlay so it cannot cover the picker.
+    showPause(false);
+    exitLock();
   }
 });
 
@@ -1059,6 +1078,7 @@ net.on(connection, S2C.ZONE, (msg) => {
 
 net.on(connection, S2C.LOOT, (msg) => {
   if (msg.all) setLoot(royale, msg.all);
+  if (msg.upsert) upsertLoot(royale, msg.upsert);
   if (msg.taken) removeLoot(royale, msg.taken);
 });
 
@@ -1066,6 +1086,13 @@ net.on(connection, S2C.ALIVE, (msg) => {
   app.aliveCount = msg.alive;
   app.aliveTotal = msg.total;
   hud.updateAlive(msg.alive, msg.total);
+});
+
+net.on(connection, S2C.BR_WIN, (msg) => {
+  const mine = msg.winnerId === connection.myId;
+  hud.showRespawn(false);
+  hud.setStateBanner(mine ? 'VICTORY ROYALE' : `${msg.winnerName} wins`);
+  audio.playFanfare(mine);
 });
 
 net.on(connection, S2C.PICKUP, (msg) => {
@@ -1233,9 +1260,11 @@ onLockChange((locked) => {
   if (locked) {
     showPause(false);
     audio.resumeAudio();
-  } else if (inGame && !chatIsOpen(chat)) {
+  } else if (inGame && !chatIsOpen(chat) && (app.screen !== 'match' || player.alive)) {
     // Typing releases the lock deliberately; that isn't a request to pause.
     showPause(true);
+  } else if (app.screen === 'match' && !player.alive) {
+    showPause(false);
   }
 });
 
@@ -1383,7 +1412,72 @@ function currentFlags() {
   if (input.ads) f |= FLAG.ADS;
   if (input.firing) f |= FLAG.FIRING;
   if (!player.alive) f |= FLAG.DEAD;
+  if (player.parachuting) f |= FLAG.PARACHUTE;
   return f;
+}
+
+function spectatorCandidates(states) {
+  if (!states) return [];
+  const out = [];
+  for (const [id, state] of states) {
+    if (id === connection.myId || hasFlag(state.flags, FLAG.DEAD)) continue;
+    out.push({ id, state, name: app.match.roster.get(id)?.name ?? 'Survivor' });
+  }
+  return out;
+}
+
+function updateSpectator(states) {
+  const enabled = !player.alive && app.match.phase === PHASE.LIVE
+    && (app.match.mode === 'br' || app.match.mode === 'waves');
+  dom.spectator.classList.toggle('hidden', !enabled);
+  dom.respawn.classList.toggle('spectating', enabled);
+  if (!enabled) {
+    app.spectatorTargetId = null;
+    app.spectatorStep = 0;
+    return null;
+  }
+
+  const candidates = spectatorCandidates(states);
+  if (candidates.length === 0) {
+    dom['spectator-name'].textContent = 'No players remaining';
+    return null;
+  }
+  let index = candidates.findIndex((entry) => entry.id === app.spectatorTargetId);
+  if (index < 0) index = 0;
+  if (app.spectatorStep) {
+    index = (index + app.spectatorStep + candidates.length) % candidates.length;
+    app.spectatorStep = 0;
+  }
+  const selected = candidates[index];
+  app.spectatorTargetId = selected.id;
+  dom['spectator-name'].textContent = selected.name;
+  return selected.state;
+}
+
+function applySpectatorCamera(state) {
+  const focus = new THREE.Vector3(
+    state.pos[0],
+    state.pos[1] + PLAYER_HEIGHT * 0.72,
+    state.pos[2],
+  );
+  const desired = new THREE.Vector3(
+    focus.x + Math.sin(state.yaw) * 4.8,
+    focus.y + 2.1,
+    focus.z + Math.cos(state.yaw) * 4.8,
+  );
+  const delta = desired.clone().sub(focus);
+  const distance = delta.length();
+  const direction = delta.normalize();
+  const wall = raycastBoxes(
+    [focus.x, focus.y, focus.z],
+    [direction.x, direction.y, direction.z],
+    app.map.solids,
+    distance,
+  );
+  if (wall) desired.copy(focus).addScaledVector(direction, Math.max(0.35, wall.t - 0.25));
+  camera.position.lerp(desired, 0.22);
+  camera.lookAt(focus);
+  camera.updateMatrixWorld();
 }
 
 const EMOTE_INPUTS = [
@@ -1446,10 +1540,9 @@ function step(dt, now) {
   player.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, player.pitch - look.dy));
   app.lookDelta = look;
 
-  // While dead the number keys pick your next class rather than a weapon — you
-  // have no weapon to switch to, and the pointer is still locked so the mouse
-  // can't reach the picker on screen. Has to run before handleWeaponInput,
-  // which consumes the same keypress.
+  // The death screen now releases the pointer for its clickable gun cards.
+  // Number keys remain as a quick-access fallback and have to run before
+  // handleWeaponInput, which consumes the same keypress.
   if (app.screen === 'match' && !player.alive && app.match.mode !== 'gungame' && input.weaponSlot > 0) {
     quickPickType(input.weaponSlot);
     input.weaponSlot = 0;
@@ -1475,9 +1568,10 @@ function step(dt, now) {
   }
 
   const worldStates = app.screen === 'match' ? net.sampleWorld(connection) : null;
+  const spectatorState = app.screen === 'match' ? updateSpectator(worldStates) : null;
 
   const frozen = app.screen === 'match' && app.match.phase !== PHASE.LIVE;
-  if (input.locked && !frozen) handleFiring(now, worldStates);
+  if (input.locked && !frozen && !player.parachuting) handleFiring(now, worldStates);
   handleEmoteInput(frozen, now);
 
   // E picks up the loot you're standing on. Battle royale only: it's the one mode
@@ -1546,7 +1640,8 @@ function step(dt, now) {
     });
   }
 
-  applyToCamera(player, camera, settings.fov);
+  if (spectatorState) applySpectatorCamera(spectatorState);
+  else applyToCamera(player, camera, settings.fov);
 
   // Explosion shake, applied after the camera is otherwise final. Rotational
   // rather than positional so it can't shove the eye through a wall.
@@ -1578,6 +1673,7 @@ function step(dt, now) {
       msToNext: royale.zone?.msToNext ?? 0,
       outside: player.alive && isOutsideZone(royale, player.pos),
       dps: royale.zone?.dps ?? 0,
+      parachuting: player.parachuting,
     });
   }
   app.shake *= Math.max(0, 1 - 6.5 * dt);

@@ -87,10 +87,18 @@
         <div class="big" id="respawn-title">DOWN</div>
         <div id="respawn-by"></div>
         <div id="respawn-timer"></div>
-        <!-- pointer lock is still held while dead, so this is driven by the
-             number keys rather than the mouse -->
+        <div id="spectator" class="hidden">
+          <button id="spectator-prev" aria-label="Previous player">‹</button>
+          <div>
+            <span>SPECTATING</span>
+            <b id="spectator-name">—</b>
+          </div>
+          <button id="spectator-next" aria-label="Next player">›</button>
+        </div>
+        <!-- Death releases pointer lock so the next loadout can be picked with
+             the mouse before the respawn arrives. -->
         <div id="respawn-class" class="hidden">
-          <div class="label">Change gun — press a number</div>
+          <div class="label">Choose your next gun</div>
           <div class="class-picker" id="respawn-class-picker"></div>
         </div>
       </div>
@@ -113,7 +121,7 @@
     <div id="menu">
       <div id="menu-inner">
         <h1>ARENA</h1>
-        <p class="tagline">Browser FPS. No accounts, no downloads. Share a link and go.</p>
+        <p class="tagline">Drop in, gear up, and outlast 29 rivals. No accounts or downloads.</p>
 
         <label class="field">
           <span>Your name</span>
@@ -121,7 +129,7 @@
         </label>
 
         <div class="menu-actions">
-          <button id="btn-quickplay" class="primary">Quick play</button>
+          <button id="btn-quickplay" class="primary">Play Battle Royale</button>
           <button id="btn-practice" class="ghost">Practice range</button>
         </div>
 
@@ -134,11 +142,11 @@
 
         <div class="create-row">
           <select id="mode-select">
+            <option value="br">Battle Royale (30)</option>
             <option value="tdm">Team Deathmatch</option>
             <option value="ffa">Free-for-all</option>
             <option value="gungame">Gun Game</option>
             <option value="waves">Survival (solo/co-op)</option>
-            <option value="br">Battle Royale (30)</option>
           </select>
           <button id="btn-create">Create room</button>
         </div>
@@ -191,11 +199,11 @@
           <div class="label">Host controls</div>
           <div class="host-row">
             <select id="lobby-mode-select">
+              <option value="br">Battle Royale (30)</option>
               <option value="tdm">Team Deathmatch</option>
               <option value="ffa">Free-for-all</option>
               <option value="gungame">Gun Game</option>
             <option value="waves">Survival (solo/co-op)</option>
-            <option value="br">Battle Royale (30)</option>
             </select>
             <select id="lobby-map-select"></select>
           </div>

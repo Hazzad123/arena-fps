@@ -78,6 +78,9 @@ export const MODE_ROUND_MS = {
   tdm: ROUND_MS,
   ffa: ROUND_MS,
   gungame: 330_000, // 5m30
+  // The island is deliberately huge and the circle closes in several readable
+  // stages. A three-minute arena clock used to cut Battle Royale off mid-game.
+  br: 720_000, // 12 minutes; the last-player check normally ends it sooner
   // Survival has no clock — the run ends when everyone is down. A nominal value
   // keeps the phase machine happy without ever being reached in practice.
   waves: 3_600_000,
@@ -90,17 +93,23 @@ export const MODE_ROUND_MS = {
 // caught out cannot simply walk it off, but the first phase is survivable — being
 // slightly late shouldn't be an execution.
 export const BR_ZONE_PHASES = [
-  { holdMs: 45_000, shrinkMs: 40_000, radius: 92, dps: 2 },
-  { holdMs: 30_000, shrinkMs: 35_000, radius: 62, dps: 4 },
-  { holdMs: 25_000, shrinkMs: 30_000, radius: 38, dps: 7 },
-  { holdMs: 20_000, shrinkMs: 25_000, radius: 20, dps: 12 },
-  { holdMs: 20_000, shrinkMs: 20_000, radius: 8, dps: 20 },
-  { holdMs: 0, shrinkMs: 0, radius: 8, dps: 25 },
+  { holdMs: 70_000, shrinkMs: 55_000, radius: 270, dps: 2 },
+  { holdMs: 55_000, shrinkMs: 50_000, radius: 190, dps: 4 },
+  { holdMs: 45_000, shrinkMs: 45_000, radius: 125, dps: 7 },
+  { holdMs: 35_000, shrinkMs: 40_000, radius: 72, dps: 11 },
+  { holdMs: 25_000, shrinkMs: 30_000, radius: 35, dps: 16 },
+  { holdMs: 20_000, shrinkMs: 25_000, radius: 12, dps: 24 },
+  { holdMs: 0, shrinkMs: 0, radius: 12, dps: 30 },
 ];
-export const BR_START_RADIUS = 135;
-export const BR_DROP_MS = 12_000; // grace before the first zone starts moving
-export const BR_LOOT_COUNT = 60; // guns on the ground at the start
+export const BR_START_RADIUS = 365;
+export const BR_DROP_MS = 35_000; // parachute + looting grace before the first close
+export const BR_LOOT_COUNT = 180; // a large island needs multiple choices per district
 export const BR_LOOT_RADIUS = 1.6; // how close you must be to pick one up
+export const BR_DROP_HEIGHT = 92;
+export const PARACHUTE_FALL_SPEED = 7;
+export const PARACHUTE_GLIDE_SPEED = 11;
+export const BR_VICTORY_MS = 8_000;
+export const BR_SCOREBOARD_MS = 25_000;
 
 // ---------------------------------------------------------------- health packs
 // Pickups are NOT part of map.solids — you walk over them, you don't bump into
@@ -151,7 +160,7 @@ export const DEFAULT_FOV = 80;
 export const MIN_FOV = 60;
 export const MAX_FOV = 110;
 export const DEFAULT_SENSITIVITY = 1.0;
-export const VIEW_DISTANCE = 220;
+export const VIEW_DISTANCE = 480;
 
 export const TEAMS = { A: 'A', B: 'B' };
 export const TEAM_COLORS = { A: 0x4a90d9, B: 0xd95a4a };

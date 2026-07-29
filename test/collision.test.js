@@ -9,6 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  clampHorizontalSpeed,
   compileBoxes,
   slab,
   moveAndCollide,
@@ -197,6 +198,21 @@ test('pushOutOfSolids frees a player spawned inside a box', () => {
   const freed = pushOutOfSolids(pos, H, R, boxes);
   assert.equal(freed, true);
   assert.equal(playerOverlapsAny(pos, H, R, boxes), false);
+});
+
+// ------------------------------------------------------------ speed limiting
+
+test('horizontal speed is capped without changing jump velocity', () => {
+  const state = { vel: [8, 7.5, 8] };
+  clampHorizontalSpeed(state, 9);
+  assert.ok(Math.abs(Math.hypot(state.vel[0], state.vel[2]) - 9) < 1e-9);
+  assert.equal(state.vel[1], 7.5);
+});
+
+test('horizontal speed cap leaves legal movement untouched', () => {
+  const state = { vel: [3, -12, 4] };
+  clampHorizontalSpeed(state, 9);
+  assert.deepEqual(state.vel, [3, -12, 4]);
 });
 
 // ------------------------------------------------------------ raycast: boxes

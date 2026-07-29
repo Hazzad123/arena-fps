@@ -91,9 +91,13 @@ export function updateAlive(alive, total) {
   el['br-alive'].title = `${alive} of ${total} still standing`;
 }
 
-export function updateZone({ state, msToNext, outside, dps }) {
+export function updateZone({ state, msToNext, outside, dps, parachuting = false }) {
   const z = el['br-zone'];
   z.classList.toggle('danger', !!outside);
+  if (parachuting) {
+    z.textContent = 'PARACHUTING — steer with WASD and choose your landing';
+    return;
+  }
   if (outside) {
     z.textContent = `OUTSIDE THE ZONE — ${Math.round(dps)} damage a second. Get inside.`;
     return;

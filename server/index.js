@@ -46,8 +46,10 @@ function createRoom(mode) {
 }
 
 /** A room with space, preferring one that's mid-match so you get straight in. */
-function findJoinableRoom() {
-  const candidates = [...rooms.values()].filter((r) => !r.isFull());
+function findJoinableRoom(mode = null) {
+  const candidates = [...rooms.values()].filter(
+    (r) => !r.isFull() && (!mode || r.mode === mode),
+  );
   if (candidates.length === 0) return null;
   candidates.sort((a, b) => {
     const live = (r) => (r.phase === PHASE.LIVE || r.phase === PHASE.COUNTDOWN ? 1 : 0);
@@ -207,7 +209,8 @@ function handleMessage(session, ws, msg) {
 
     case C2S.QUICKPLAY: {
       leaveRoom(session);
-      const room = findJoinableRoom() ?? createRoom(msg.mode ?? 'tdm');
+      const wantedMode = MODES.includes(msg.mode) ? msg.mode : 'br';
+      const room = findJoinableRoom(wantedMode) ?? createRoom(wantedMode);
       if (!room) {
         ws.send(encode(S2C.ERROR, { code: 'no-capacity', message: 'Server is full — try again shortly.' }));
         return;

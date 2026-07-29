@@ -1,6 +1,6 @@
 // ISLAND — the battle royale map.
 //
-// 260m square, which is roughly twenty times the area of Warehouse. Hand-placing
+// 540m square, which is roughly eighty times the area of Warehouse. Hand-placing
 // that much cover would be days of work and would read as a corridor shooter
 // stretched out, so it's generated from a deterministic grid of districts: each
 // cell picks a layout from a small set and fills itself, seeded off its own
@@ -12,7 +12,7 @@
 //     able to see it closing from anywhere.
 //   - Buildings are walk-in, not solid blocks: loot goes inside them, so there
 //     has to be an inside.
-//   - Sightlines break every ~30m. A 260m map with clear lines is a sniper's
+//   - Sightlines break every ~30m. A 540m map with clear lines is a sniper's
 //     shooting gallery and nobody else's game.
 
 import { box, crateStack, prop, barrel, stairs } from './helpers.js';
@@ -33,9 +33,9 @@ const C = {
   water: 0x3f5f6b,
 };
 
-const HALF = 130; // 260m across
-const CELL = 52; // district size; 5x5 grid
-const GRID = 5;
+const HALF = 270; // 540m across
+const CELL = 60;
+const GRID = 9; // 81 districts: enough space for genuinely separate landings
 
 /**
  * Deterministic pseudo-random from integer coordinates. Same island every match,
@@ -250,7 +250,7 @@ function ringSpawns(boxes, count, startRadius, fromAngle = 0, toAngle = Math.PI 
     const t = full ? i / count : (count === 1 ? 0.5 : i / (count - 1));
     const a = fromAngle + span * t;
     let placed = null;
-    for (let r = startRadius; r >= 45; r -= 2) {
+    for (let r = startRadius; r >= 80; r -= 2) {
       const p = [Math.cos(a) * r, 0, Math.sin(a) * r];
       if (!playerOverlapsAny(p, PLAYER_HEIGHT, PLAYER_RADIUS, solids)) {
         placed = p;
@@ -268,23 +268,46 @@ function ringSpawns(boxes, count, startRadius, fromAngle = 0, toAngle = Math.PI 
  * Loot spawn points. Ground loot is placed by the server from these; each one
  * gets a random gun of a random tier, so the same island plays differently.
  */
-function lootPoints() {
+function lootPoints(boxes) {
   const out = [];
+  const solids = compileBoxes(boxes);
   const half = (GRID - 1) / 2;
   for (let gx = 0; gx < GRID; gx++) {
     for (let gz = 0; gz < GRID; gz++) {
       const cx = (gx - half) * CELL;
       const cz = (gz - half) * CELL;
       const r = (salt) => rand(gx + 1, gz + 1, 500 + salt);
-      // Six per district, scattered but never right on the edge where they'd end
-      // up inside a sea wall.
-      for (let i = 0; i < 6; i++) {
-        out.push([
+      // Plenty of candidates per district. Reject anything inside authored
+      // cover so every glowing pickup is genuinely reachable on the ground.
+      for (let i = 0; i < 9; i++) {
+        const point = [
           cx + (r(i * 3) - 0.5) * (CELL - 14),
           0,
           cz + (r(i * 3 + 1) - 0.5) * (CELL - 14),
-        ]);
+        ];
+        if (!playerOverlapsAny(point, PLAYER_HEIGHT, PLAYER_RADIUS, solids)) out.push(point);
       }
+    }
+  }
+  return out;
+}
+
+/** A grounded medical cache in roughly half the districts. */
+function healthPacks(boxes) {
+  const solids = compileBoxes(boxes);
+  const out = [];
+  const half = (GRID - 1) / 2;
+  const offsets = [[0, 0], [18, 0], [-18, 0], [0, 18], [0, -18], [18, 18], [-18, -18]];
+
+  for (let gx = 0; gx < GRID; gx++) {
+    for (let gz = 0; gz < GRID; gz++) {
+      if ((gx + gz) % 2 !== 0) continue;
+      const cx = (gx - half) * CELL;
+      const cz = (gz - half) * CELL;
+      const point = offsets
+        .map(([dx, dz]) => [cx + dx, 0, cz + dz])
+        .find((p) => !playerOverlapsAny(p, PLAYER_HEIGHT, PLAYER_RADIUS, solids));
+      if (point) out.push(point);
     }
   }
   return out;
@@ -295,22 +318,20 @@ const BOXES = build();
 export default {
   id: 'island',
   name: 'The Island',
-  blurb: '260m across. Land with a pistol, find something better.',
+  blurb: '540m across. Parachute in, loot up, and outrun the storm.',
   battleRoyale: true,
   skyColor: 0x9fc0d8,
   fogColor: 0xb5cadb,
-  fogDensity: 0.0035,
+  fogDensity: 0.0022,
   ambientLight: 0.85,
   sunDirection: [0.4, 0.85, 0.35],
   sunIntensity: 1.1,
   groundTexture: 'concrete',
   wallTexture: 'blockwork',
-  bounds: { min: [-HALF - 12, -12, -HALF - 12], max: [HALF + 12, 40, HALF + 12] },
+  bounds: { min: [-HALF - 12, -12, -HALF - 12], max: [HALF + 12, 130, HALF + 12] },
   boxes: BOXES,
-  // No health packs: in battle royale you heal by looting, not by standing on a
-  // cross that respawns every twenty seconds.
-  healthPacks: [],
-  lootPoints: lootPoints(),
+  healthPacks: healthPacks(BOXES),
+  lootPoints: lootPoints(BOXES),
   spawns: {
     // Everyone starts on the shoreline and walks in.
     ffa: ringSpawns(BOXES, 30, HALF - 14),

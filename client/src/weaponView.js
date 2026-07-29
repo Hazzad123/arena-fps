@@ -150,34 +150,50 @@ const HIP = new THREE.Vector3(0.2, -0.18, -0.62);
 // gun's centreline on the crosshair (which is what "align the sights" naively
 // suggests) parks the receiver directly over whatever you're shooting at.
 const ADS = new THREE.Vector3(0.0, -0.175, -0.46);
-const VIEW_SCALE = 0.84;
+const VIEW_SCALE = 0.93;
 // Shrink a little while aimed, so it intrudes even less.
 const ADS_SCALE = 0.76;
 // Imported models vary wildly in height and bulk even after being fitted to
 // the procedural weapon's length. These values normalize their first-person
 // screen footprint while preserving the intended pistol/SMG/rifle hierarchy.
 const WEAPON_VIEW_SCALE = {
-  pistol: 1.18,
-  revolver: 1.8,
-  machinepistol: 1.2,
-  smg: 0.86,
-  smg_compact: 1.18,
-  smg_heavy: 1.12,
+  pistol: 1.15,
+  revolver: 1.25,
+  machinepistol: 1.15,
+  smg: 1.02,
+  smg_compact: 1.05,
+  smg_heavy: 1.02,
   rifle: 1,
-  carbine: 1,
-  bullpup: 0.92,
-  shotgun: 0.88,
-  sawnoff: 0.56,
-  autoshotgun: 0.78,
-  sniper: 1,
-  dmr: 1.12,
-  antimateriel: 1,
-  lmg: 0.88,
-  knife: 1.55,
+  carbine: 1.02,
+  bullpup: 1,
+  shotgun: 1,
+  sawnoff: 0.9,
+  autoshotgun: 0.95,
+  sniper: 1.08,
+  dmr: 1.03,
+  antimateriel: 1.1,
+  lmg: 1.02,
+  knife: 1.15,
 };
 // A few degrees of yaw shows the gun in three-quarter view instead of flat
 // side-on, which reads much better. Purely cosmetic — shots follow the camera.
-const BASE_YAW = -0.07;
+const BASE_YAW = -0.1;
+const WEAPON_POSE_YAW = {
+  shotgun: -0.13,
+  autoshotgun: -0.13,
+  dmr: -0.145,
+  sniper: -0.16,
+  antimateriel: -0.18,
+  lmg: -0.135,
+};
+// Several long imported meshes have a chunky receiver and a short authored
+// barrel. Giving only their forward axis more room restores a recognisable rifle
+// silhouette without making the stock, scope and grip comically wide.
+const MODEL_LENGTH_MULT = {
+  dmr: 1.12,
+  sniper: 1.25,
+  antimateriel: 1.35,
+};
 const BASE_PITCH = 0.02;
 
 // The viewmodel gets its own scene and camera, rendered as a second pass on top
@@ -321,10 +337,15 @@ const FORWARD_ROTATION = {
  * the walking bob are all tuned against that volume, so a model that fills the
  * same volume inherits every one of them without a single number changing.
  */
-function fitGunModel(model, loaded, forward) {
+function fitGunModel(model, loaded, forward, weaponId) {
+  const orientation = new THREE.Group();
+  orientation.add(instantiate(loaded));
+  FORWARD_ROTATION[forward]?.(orientation);
+  // Scaling belongs outside the orientation transform. If scale.z is placed on
+  // the rotated node, a model authored along X gets stretched sideways instead
+  // of down the barrel after that X axis is turned toward camera -Z.
   const pivot = new THREE.Group();
-  pivot.add(instantiate(loaded));
-  FORWARD_ROTATION[forward]?.(pivot);
+  pivot.add(orientation);
 
   const target = model.bounds;
 
@@ -346,6 +367,7 @@ function fitGunModel(model, loaded, forward) {
   }
 
   pivot.scale.setScalar(targetSize.z / currentSize.z);
+  pivot.scale.z *= MODEL_LENGTH_MULT[weaponId] ?? 1;
   pivot.updateMatrixWorld(true);
 
   const scaled = new THREE.Box3().setFromObject(pivot);
@@ -363,7 +385,7 @@ function loadGunModels(models) {
 
     loadModel(url).then((loaded) => {
       if (!loaded) return; // keep the boxes
-      const fitted = fitGunModel(model, loaded, forward);
+      const fitted = fitGunModel(model, loaded, forward, id);
       if (!fitted) return;
 
       model.group.add(fitted);
@@ -526,14 +548,15 @@ export function updateWeaponView(view, dt, now, player, lookDelta) {
   m.group.position.copy(pos);
   m.group.rotation.set(
     BASE_PITCH + view.kick * 0.09,
-    BASE_YAW * (1 - t) + view.lowerAmount * 0.5 + reload.yaw,
+    (WEAPON_POSE_YAW[view.currentId] ?? BASE_YAW) * (1 - t)
+      + view.lowerAmount * 0.5 + reload.yaw,
     view.lowerAmount * 0.25 + reload.roll,
   );
 
   // A scoped sniper hides the model entirely — you're looking down the optic, and
   // the scope overlay provides the reticle instead.
   const scoped = isScoped(view.currentId, player.adsProgress) && reloadProgress === 0;
-  m.group.visible = !scoped;
+  m.group.visible = !scoped && player.alive && !player.parachuting;
 
   if (now > view.flashUntil) m.flash.visible = false;
 }

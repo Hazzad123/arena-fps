@@ -167,6 +167,10 @@ function buildFigure(color) {
   armPivot.add(weapon);
   group.add(armPivot);
 
+  const boxMeshes = [...group.children];
+  const parachute = buildParachute(color);
+  group.add(parachute);
+
   return {
     group,
     armPivot,
@@ -177,8 +181,40 @@ function buildFigure(color) {
     legR,
     mats: [teamMat, darkMat, skinMat],
     // Kept so the character model can hide them without disturbing the group.
-    boxMeshes: [...group.children],
+    boxMeshes,
+    parachute,
   };
+}
+
+function buildParachute(color) {
+  const rig = new THREE.Group();
+  rig.visible = false;
+
+  const canopy = new THREE.Mesh(
+    new THREE.SphereGeometry(2.15, 18, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+    new THREE.MeshLambertMaterial({
+      color: new THREE.Color(color).lerp(new THREE.Color(0xf2d88a), 0.55),
+      side: THREE.DoubleSide,
+      flatShading: true,
+    }),
+  );
+  canopy.position.y = 4.15;
+  canopy.scale.z = 0.72;
+  canopy.castShadow = true;
+  rig.add(canopy);
+
+  const cordMat = new THREE.LineBasicMaterial({ color: 0xd8d2bd });
+  for (const [x, z] of [[-1.65, -0.7], [1.65, -0.7], [-1.65, 0.7], [1.65, 0.7]]) {
+    const cord = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(x, 4.05, z),
+        new THREE.Vector3(x * 0.12, 1.3, z * 0.12),
+      ]),
+      cordMat,
+    );
+    rig.add(cord);
+  }
+  return rig;
 }
 
 /**
@@ -350,6 +386,7 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
     // for — was never seen once.
     const dead = hasFlag(state.flags, FLAG.DEAD);
     if (dead) {
+      entity.parachute.visible = false;
       rp.emotes.delete(id);
       entity.label.style.display = 'none';
       entity.group.visible = true;
@@ -371,6 +408,8 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
 
     // Back on their feet: undo anything the death pose changed.
     entity.group.rotation.x = 0;
+    const parachuting = hasFlag(state.flags, FLAG.PARACHUTE);
+    entity.parachute.visible = parachuting;
 
     // ---- pose ----
     entity.group.position.set(state.pos[0], state.pos[1], state.pos[2]);
@@ -391,7 +430,7 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
       // The rig has a Duck clip, so squashing the whole figure — which is what the
       // box version has to do — would be crouching twice.
       entity.group.scale.y = 1;
-      showHeldWeapon(entity.character, emote ? null : state.weapon);
+      showHeldWeapon(entity.character, emote || parachuting ? null : state.weapon);
       if (emote) {
         playClip(entity.character, emote.clip, { loop: false });
       } else {
@@ -417,6 +456,7 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
       entity.legL.rotation.x = swing;
       entity.legR.rotation.x = -swing;
       applyFallbackEmote(entity, emote, now);
+      if (parachuting) entity.weapon.visible = false;
     }
 
     // ---- weapon model roughly matches what they're holding ----
