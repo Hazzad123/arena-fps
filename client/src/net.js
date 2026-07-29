@@ -32,8 +32,10 @@ export function createNet() {
     latency: 0,
 
     lastSendAt: 0,
-    reconnectAttempts: 0,
-    reconnectTimer: null,
+    // Set when the client itself closed the socket, so an expected close doesn't
+    // raise the 'connection lost' notice. There is deliberately no auto-reconnect:
+    // the server holds rooms in memory and a dropped player is removed from theirs,
+    // so silently reattaching would land you in a match you are no longer part of.
     intentionalClose: false,
   };
 }
@@ -63,7 +65,6 @@ export function connect(net, { name } = {}) {
     ws.addEventListener('open', () => {
       clearTimeout(openTimeout);
       net.connected = true;
-      net.reconnectAttempts = 0;
       send(net, C2S.HELLO, { name });
       resolve();
     });
@@ -104,7 +105,6 @@ export function connect(net, { name } = {}) {
 
 export function disconnect(net) {
   net.intentionalClose = true;
-  clearTimeout(net.reconnectTimer);
   if (net.ws && net.connected) {
     send(net, C2S.LEAVE, {});
     net.ws.close();

@@ -126,6 +126,16 @@ export default {
   lethalFallY: FALL_Y,
   bounds: { min: [-40, FALL_Y - 5, -40], max: [40, 30, 40] },
   boxes: build(),
+  // Health pickups. Not solids — you walk over them.
+  healthPacks: [
+    // The tower one is the prize; the corner roofs are the safer options.
+    [0, 4.0, 0],          // top of the tower
+    [-24, 0, 0],          // west roof
+    [24, 0, 0],           // east roof
+    [21.5, 0, -21.5],
+    [-21.5, 0, 21.5],
+  ],
+
   spawns: {
     A: [
       [-12, 0, -26],

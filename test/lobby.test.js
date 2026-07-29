@@ -13,7 +13,7 @@ import { Room } from '../server/room.js';
 import { PHASE, S2C, decode } from '../shared/protocol.js';
 import { MAX_PLAYERS, MIN_PLAYERS_TO_START, LOBBY_GRACE_MS } from '../shared/constants.js';
 import { ROOM_CAPACITY } from '../server/modes.js';
-import { CLASSES, CLASS_IDS, DEFAULT_CLASS, WEAPONS, loadoutForClass, GUNGAME_LADDER } from '../shared/weapons.js';
+import { PRIMARY_IDS, DEFAULT_PRIMARY, WEAPONS, WEAPON_TYPES, loadoutForPrimary, GUNGAME_LADDER, weaponsOfType } from '../shared/weapons.js';
 import { nextMap } from '../shared/maps/index.js';
 
 /** A socket that just records what the server sent it. */
@@ -236,16 +236,16 @@ test('a class given at join time is used for the very first spawn', (t) => {
   // Joining a live match spawns you immediately, so the class has to arrive with
   // the join rather than in a message after it.
   const ws = fakeSocket();
-  const latecomer = room.addPlayer({ id: 'late', name: 'Late', ws, classId: 'support' });
-  assert.equal(latecomer.classId, 'support');
-  assert.deepEqual(latecomer.inventory, loadoutForClass('support'));
-  assert.deepEqual(ws.last(S2C.RESPAWN).inventory, loadoutForClass('support'));
+  const latecomer = room.addPlayer({ id: 'late', name: 'Late', ws, primaryId: 'lmg' });
+  assert.equal(latecomer.primaryId, 'lmg');
+  assert.deepEqual(latecomer.inventory, loadoutForPrimary('lmg'));
+  assert.deepEqual(ws.last(S2C.RESPAWN).inventory, loadoutForPrimary('lmg'));
 });
 
 test('a junk class at join time falls back instead of breaking the join', (t) => {
   const { room } = makeRoom(t, 1, 'ffa');
-  const player = room.addPlayer({ id: 'x', name: 'X', ws: fakeSocket(), classId: 'wizard' });
-  assert.equal(player.classId, DEFAULT_CLASS);
+  const player = room.addPlayer({ id: 'x', name: 'X', ws: fakeSocket(), primaryId: 'wizard' });
+  assert.equal(player.primaryId, DEFAULT_PRIMARY);
 });
 
 test('ready toggles are ignored outside the lobby', (t) => {
@@ -506,61 +506,76 @@ test('the next map is only named on the results screen', (t) => {
   assert.equal(room.phasePayload().nextMapId, null, 'nor is a live round');
 });
 
-// ------------------------------------------------------------------- classes
+// -------------------------------------------------------------------- guns
 
-test('every class names a real weapon and a distinct primary', () => {
-  assert.ok(CLASS_IDS.length >= 4, 'a class picker needs enough choices to be a choice');
-  assert.ok(CLASSES[DEFAULT_CLASS], 'the default class has to exist');
+test('every selectable gun is a real weapon with a type', () => {
+  assert.ok(PRIMARY_IDS.length >= 8, 'a gun picker needs enough choices to be a choice');
+  assert.ok(WEAPONS[DEFAULT_PRIMARY], 'the default gun has to exist');
 
-  const primaries = new Set();
-  for (const id of CLASS_IDS) {
-    const cls = CLASSES[id];
-    assert.equal(cls.id, id, `${id}: id must match its key`);
-    assert.ok(cls.name && cls.blurb, `${id}: needs a name and a blurb for the picker`);
-    assert.ok(WEAPONS[cls.primary], `${id}: primary ${cls.primary} is not a real weapon`);
-    assert.ok(!primaries.has(cls.primary), `${cls.primary} is the primary of two classes`);
-    primaries.add(cls.primary);
+  for (const id of PRIMARY_IDS) {
+    const w = WEAPONS[id];
+    assert.ok(w, `${id} is not a real weapon`);
+    assert.equal(w.id, id, `${id}: id must match its key`);
+    assert.ok(w.name, `${id}: needs a name for the picker`);
+    assert.ok(w.type, `${id}: needs a type to be grouped under`);
+    assert.ok(w.model, `${id}: needs a model to draw`);
+    assert.notEqual(w.type, 'melee', 'the knife is not a primary');
   }
 });
 
-test('every class fits on the number keys', () => {
-  assert.ok(CLASS_IDS.length <= 9, 'classes are chosen with digits 1-9 on the death screen');
+test('every gun type has at least one gun, and every gun has a type', () => {
+  const typeIds = WEAPON_TYPES.map((t) => t.id);
+  for (const t of WEAPON_TYPES) {
+    assert.ok(weaponsOfType(t.id).length > 0, `${t.id} has no weapons`);
+    assert.ok(t.name && t.blurb, `${t.id} needs a name and a blurb`);
+  }
+  for (const [id, w] of Object.entries(WEAPONS)) {
+    assert.ok(
+      typeIds.includes(w.type) || w.type === 'melee',
+      `${id} has type "${w.type}", which no picker group covers`,
+    );
+  }
 });
 
-test('a loadout is the class primary plus the shared sidearm and knife', () => {
-  for (const id of CLASS_IDS) {
-    assert.deepEqual(loadoutForClass(id), [CLASSES[id].primary, 'pistol', 'knife']);
+test('the number keys reach every gun type', () => {
+  // Digits pick a *type*, not a specific gun — there are more guns than digits.
+  assert.ok(WEAPON_TYPES.length <= 9, 'types are chosen with digits 1-9');
+});
+
+test('a loadout is your chosen gun plus the shared sidearm and knife', () => {
+  for (const id of PRIMARY_IDS) {
+    assert.deepEqual(loadoutForPrimary(id), [id, 'pistol', 'knife']);
   }
   // Junk from the wire falls back rather than throwing.
-  assert.deepEqual(loadoutForClass('nope'), loadoutForClass(DEFAULT_CLASS));
+  assert.deepEqual(loadoutForPrimary('nope'), loadoutForPrimary(DEFAULT_PRIMARY));
 });
 
 test('players start on the default class and spawn with its loadout', (t) => {
   const { room, players } = makeRoom(t, 2, 'ffa');
-  assert.equal(players[0].classId, DEFAULT_CLASS);
+  assert.equal(players[0].primaryId, DEFAULT_PRIMARY);
 
   readyAll(room, players);
   room.beginRound();
-  assert.deepEqual(players[0].inventory, loadoutForClass(DEFAULT_CLASS));
+  assert.deepEqual(players[0].inventory, loadoutForPrimary(DEFAULT_PRIMARY));
 });
 
 test('choosing a class in the lobby re-arms you immediately', (t) => {
   const { room, players } = makeRoom(t, 2, 'ffa');
   const ws = players[0].ws;
 
-  room.handleSetClass(players[0], { classId: 'recon' });
-  assert.equal(players[0].classId, 'recon');
-  assert.deepEqual(players[0].inventory, loadoutForClass('recon'));
+  room.handleSetPrimary(players[0], { primaryId: 'sniper' });
+  assert.equal(players[0].primaryId, 'sniper');
+  assert.deepEqual(players[0].inventory, loadoutForPrimary('sniper'));
   assert.equal(players[0].weapon, 'sniper');
 
   const load = ws.last(S2C.LOADOUT);
-  assert.equal(load.classId, 'recon', 'the client needs the change confirmed');
-  assert.deepEqual(load.inventory, loadoutForClass('recon'));
+  assert.equal(load.primaryId, 'sniper', 'the client needs the change confirmed');
+  assert.deepEqual(load.inventory, loadoutForPrimary('sniper'));
 
   // And it survives into the match.
   readyAll(room, players);
   room.beginRound();
-  assert.deepEqual(players[0].inventory, loadoutForClass('recon'));
+  assert.deepEqual(players[0].inventory, loadoutForPrimary('sniper'));
 });
 
 test('a live player cannot re-arm mid-fight; the choice waits for their respawn', (t) => {
@@ -572,8 +587,8 @@ test('a live player cannot re-arm mid-fight; the choice waits for their respawn'
   assert.equal(victim.alive, true);
   const held = [...victim.inventory];
 
-  room.handleSetClass(victim, { classId: 'breacher' });
-  assert.equal(victim.classId, 'breacher', 'the choice is remembered');
+  room.handleSetPrimary(victim, { primaryId: 'shotgun' });
+  assert.equal(victim.primaryId, 'shotgun', 'the choice is remembered');
   assert.deepEqual(victim.inventory, held, 'but the gun in their hands does not change');
 
   // Die, and the new class arrives with the respawn.
@@ -582,7 +597,7 @@ test('a live player cannot re-arm mid-fight; the choice waits for their respawn'
   victim.respawnAt = Date.now() - 1;
   room.tickLive(Date.now());
   assert.equal(victim.alive, true);
-  assert.deepEqual(victim.inventory, loadoutForClass('breacher'));
+  assert.deepEqual(victim.inventory, loadoutForPrimary('shotgun'));
 });
 
 test('a dead player changing class re-arms at once, before respawning', (t) => {
@@ -592,35 +607,35 @@ test('a dead player changing class re-arms at once, before respawning', (t) => {
 
   const victim = players[0];
   room.killPlayer(victim, players[1], 'rifle');
-  room.handleSetClass(victim, { classId: 'support' });
-  assert.deepEqual(victim.inventory, loadoutForClass('support'), 'the death screen choice is instant');
+  room.handleSetPrimary(victim, { primaryId: 'lmg' });
+  assert.deepEqual(victim.inventory, loadoutForPrimary('lmg'), 'the death screen choice is instant');
 
   const respawn = (() => {
     victim.respawnAt = Date.now() - 1;
     room.tickLive(Date.now());
     return victim.ws.last(S2C.RESPAWN);
   })();
-  assert.deepEqual(respawn.inventory, loadoutForClass('support'));
+  assert.deepEqual(respawn.inventory, loadoutForPrimary('lmg'));
 });
 
 test('an unknown class is ignored rather than trusted', (t) => {
   const { room, players } = makeRoom(t, 2, 'ffa');
 
-  room.handleSetClass(players[0], { classId: 'lolnope' });
-  assert.equal(players[0].classId, DEFAULT_CLASS);
+  room.handleSetPrimary(players[0], { primaryId: 'lolnope' });
+  assert.equal(players[0].primaryId, DEFAULT_PRIMARY);
 
-  room.handleSetClass(players[0], { classId: null });
-  assert.equal(players[0].classId, DEFAULT_CLASS);
+  room.handleSetPrimary(players[0], { primaryId: null });
+  assert.equal(players[0].primaryId, DEFAULT_PRIMARY);
 
-  room.handleSetClass(players[0], {});
-  assert.equal(players[0].classId, DEFAULT_CLASS);
+  room.handleSetPrimary(players[0], {});
+  assert.equal(players[0].primaryId, DEFAULT_PRIMARY);
 });
 
 test('gun game ignores your class and hands out the ladder', (t) => {
   const { room, players } = makeRoom(t, 2, 'gungame');
 
-  room.handleSetClass(players[0], { classId: 'recon' });
-  assert.equal(players[0].classId, 'recon', 'the pick is still remembered for other modes');
+  room.handleSetPrimary(players[0], { primaryId: 'sniper' });
+  assert.equal(players[0].primaryId, 'sniper', 'the pick is still remembered for other modes');
 
   readyAll(room, players);
   room.beginRound();
@@ -647,8 +662,8 @@ test('a gun game promotion survives the promoted player dying', (t) => {
 
 test('the roster carries classes so the lobby can show them', (t) => {
   const { room, players } = makeRoom(t, 2, 'ffa');
-  room.handleSetClass(players[1], { classId: 'marksman' });
+  room.handleSetPrimary(players[1], { primaryId: 'dmr' });
 
   const entry = room.lobbyState().roster.find((p) => p.id === players[1].id);
-  assert.equal(entry.classId, 'marksman');
+  assert.equal(entry.primaryId, 'dmr');
 });

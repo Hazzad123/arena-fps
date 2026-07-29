@@ -11,9 +11,13 @@
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
+import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 const loader = new GLTFLoader();
+const objLoader = new OBJLoader();
+const mtlLoader = new MTLLoader();
 
 /** url -> Promise<{ scene, animations } | null> */
 const cache = new Map();
@@ -57,15 +61,49 @@ function prepare(scene) {
 }
 
 /**
+ * OBJ + MTL, for the Quaternius gun pack — which ships no glTF at all, only OBJ,
+ * FBX and .blend. The MTL is loaded first because OBJLoader needs the materials
+ * up front; if it's missing we still get geometry, just in default grey.
+ *
+ * These models carry no textures, only flat MTL colours, which suits the
+ * flat-shaded look the rest of the game already has.
+ */
+async function loadObjModel(url) {
+  const mtlUrl = url.replace(/\.obj$/i, '.mtl');
+  try {
+    const materials = await mtlLoader.loadAsync(mtlUrl).catch(() => null);
+    if (materials) {
+      materials.preload();
+      objLoader.setMaterials(materials);
+    } else {
+      objLoader.setMaterials(null);
+    }
+    const object = await objLoader.loadAsync(url);
+    // OBJ has no scene graph metadata and no animations.
+    return { scene: prepare(object), animations: [] };
+  } finally {
+    // Leave the loader clean, or the next OBJ inherits this one's materials.
+    objLoader.setMaterials(null);
+  }
+}
+
+/**
  * Load a model, once. Resolves to null rather than rejecting — callers are
  * expected to carry on without it, so a failure isn't exceptional.
+ *
+ * Handles both .gltf and .obj; the extension decides.
  */
 export function loadModel(url) {
   if (cache.has(url)) return cache.get(url);
 
-  const promise = loader
-    .loadAsync(url)
-    .then((gltf) => ({ scene: prepare(gltf.scene), animations: gltf.animations ?? [] }))
+  const load = /\.obj$/i.test(url)
+    ? loadObjModel(url)
+    : loader.loadAsync(url).then((gltf) => ({
+      scene: prepare(gltf.scene),
+      animations: gltf.animations ?? [],
+    }));
+
+  const promise = load
     .catch((err) => {
       // Once per URL: a broken path shouldn't scroll the console for the whole match.
       if (!failed.has(url)) {

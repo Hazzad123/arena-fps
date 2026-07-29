@@ -8,26 +8,61 @@
 // versions live in, so it works either way.
 
 import * as THREE from 'three';
-import { getWeapon } from '@shared/weapons.js';
+import { getWeapon, ALL_WEAPON_IDS } from '@shared/weapons.js';
 import { loadModel, instantiate } from './models.js';
 
-// Which model stands in for which weapon, and which way it was modelled facing.
-// The kit's guns lie along -X; the knife points +Y. Nothing detects this
-// automatically because guessing the sign of a model's forward axis from its
-// bounding box is exactly the kind of cleverness that puts a barrel through
-// somebody's eye.
-const GUN_MODELS = {
-  rifle: { file: 'AK', forward: '-x' },
-  smg: { file: 'SMG', forward: '-x' },
-  pistol: { file: 'Pistol', forward: '-x' },
-  shotgun: { file: 'Shotgun', forward: '-x' },
-  sniper: { file: 'Sniper', forward: '-x' },
-  dmr: { file: 'Sniper_2', forward: '-x' },
-  lmg: { file: 'ShortCannon', forward: '-x' },
-  knife: { file: 'Knife_1', forward: '+y' },
+// Where each weapon's model comes from, driven off the `model` field in the
+// weapon table so adding a gun is one edit rather than three.
+//
+// Two packs, two conventions, and neither is guessable from the geometry:
+//   glTF (Toon Shooter kit) — guns lie along -X, the knife points +Y
+//   OBJ  (Quaternius pack)  — guns lie along +X
+// Getting the sign wrong points the barrel at your own eye, so it's declared.
+const MODEL_SOURCES = {
+  gltf: { dir: 'models/guns', ext: 'gltf', forward: '-x' },
+  obj: { dir: 'models/guns-obj', ext: 'obj', forward: '+x' },
 };
 
-const GUN_URL = (file) => `models/guns/${file}.gltf`;
+/**
+ * The box shapes are the fallback for when a model doesn't download. There are
+ * seventeen guns and eight hand-built shapes, so a gun without its own borrows
+ * the one for its type — a new shotgun looks like the shotgun rather than like
+ * nothing at all. Means adding a weapon needs no entry here.
+ */
+const TYPE_ARCHETYPE = {
+  rifle: 'rifle',
+  smg: 'smg',
+  shotgun: 'shotgun',
+  sniper: 'sniper',
+  lmg: 'lmg',
+  pistol: 'pistol',
+  melee: 'knife',
+};
+
+function archetypeFor(weaponId) {
+  if (SHAPES[weaponId]) return weaponId;
+  return TYPE_ARCHETYPE[getWeapon(weaponId).type] ?? 'rifle';
+}
+
+function shapeFor(weaponId) {
+  return SHAPES[archetypeFor(weaponId)];
+}
+
+function muzzleFor(weaponId) {
+  return MUZZLE[archetypeFor(weaponId)] ?? MUZZLE.rifle;
+}
+
+/** `model: 'obj:AssaultRifle_1'` -> a url and the axis it was modelled along. */
+function modelSpecFor(weaponId) {
+  const spec = getWeapon(weaponId).model;
+  if (!spec) return null;
+  const [kind, file] = spec.split(':');
+  const source = MODEL_SOURCES[kind];
+  if (!source || !file) return null;
+  // The knife is the one model in either pack that stands upright.
+  const forward = file.startsWith('Knife') ? '+y' : source.forward;
+  return { url: `${source.dir}/${file}.${source.ext}`, forward };
+}
 
 // Each part is [x, y, z, w, h, d, colorMultiplier, part?]. Local space: the gun
 // points down -Z, like the camera.
@@ -156,7 +191,8 @@ export function createWeaponView() {
   scene.add(root);
 
   const models = {};
-  for (const [id, parts] of Object.entries(SHAPES)) {
+  for (const id of ALL_WEAPON_IDS) {
+    const parts = shapeFor(id);
     const group = new THREE.Group();
     const base = new THREE.Color(getWeapon(id).viewColor);
     const moving = {};
@@ -187,7 +223,7 @@ export function createWeaponView() {
         depthWrite: false,
       }),
     );
-    flash.position.set(...MUZZLE[id]);
+    flash.position.set(...muzzleFor(id));
     flash.visible = false;
     group.add(flash);
 
@@ -207,7 +243,7 @@ export function createWeaponView() {
       group,
       flash,
       moving,
-      muzzle: new THREE.Vector3(...MUZZLE[id]),
+      muzzle: new THREE.Vector3(...muzzleFor(id)),
       // The boxes, so a loaded model can take their place, and the space they
       // occupy, which is what it gets fitted to.
       boxes: group.children.filter((c) => c !== flash),
@@ -234,9 +270,18 @@ export function createWeaponView() {
   };
 }
 
+// Rotations that bring a model's authored forward axis round to -Z, which is the
+// direction the camera looks. A missing entry here doesn't throw — it silently
+// leaves the gun lying sideways, and because fitGunModel then scales by the depth
+// of a model that has almost none, the result is a gun three metres wide sitting
+// off the edge of the screen. Which is exactly what the Quaternius pack did until
+// '+x' was added.
 const FORWARD_ROTATION = {
   '-x': (o) => {
     o.rotation.y = -Math.PI / 2;
+  },
+  '+x': (o) => {
+    o.rotation.y = Math.PI / 2;
   },
   '+y': (o) => {
     o.rotation.x = -Math.PI / 2;
@@ -267,6 +312,14 @@ function fitGunModel(model, loaded, forward) {
   const currentSize = current.getSize(new THREE.Vector3());
   if (currentSize.z <= 0 || targetSize.z <= 0) return null;
 
+  // A gun should be longer than it is wide once it's facing the right way. If it
+  // isn't, its forward axis was never rotated — better to keep the boxes than to
+  // scale a sideways model by its non-existent depth.
+  if (currentSize.z < Math.max(currentSize.x, currentSize.y) * 0.8) {
+    console.warn('[weaponView] model looks mis-oriented; keeping the box version');
+    return null;
+  }
+
   pivot.scale.setScalar(targetSize.z / currentSize.z);
   pivot.updateMatrixWorld(true);
 
@@ -277,11 +330,13 @@ function fitGunModel(model, loaded, forward) {
 }
 
 function loadGunModels(models) {
-  for (const [id, { file, forward }] of Object.entries(GUN_MODELS)) {
+  for (const id of Object.keys(models)) {
+    const spec = modelSpecFor(id);
     const model = models[id];
-    if (!model) continue;
+    if (!spec || !model) continue;
+    const { url, forward } = spec;
 
-    loadModel(GUN_URL(file)).then((loaded) => {
+    loadModel(url).then((loaded) => {
       if (!loaded) return; // keep the boxes
       const fitted = fitGunModel(model, loaded, forward);
       if (!fitted) return;

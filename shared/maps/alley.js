@@ -135,6 +135,16 @@ export default {
   wallTexture: 'redbrick',
   bounds: { min: [-HALF - 5, -12, -HALF - 5], max: [HALF + 5, WALL_H + 6, HALF + 5] },
   boxes: build(),
+  // Health pickups. Not solids — you walk over them.
+  healthPacks: [
+    // A small map, so two packs in the ring corners rather than the middle.
+    [0, 0, 0],            // the crossroads
+    [-13, 3.8, 13],       // north-west balcony
+    [13, 3.8, -13],       // south-east balcony
+    [-15.5, 0, 15.5],
+    [15.5, 0, -15.5],
+  ],
+
   spawns: {
     A: [
       [-14, 0, -15.5],

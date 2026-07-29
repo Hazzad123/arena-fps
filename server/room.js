@@ -8,14 +8,22 @@ import {
   SERVER_TICK_HZ, ROUND_MS, COUNTDOWN_MS, SCOREBOARD_MS, MIN_PLAYERS_TO_START,
   MAX_HEALTH, RESPAWN_DELAY_MS, SPAWN_PROTECTION_MS, REGEN_DELAY_MS,
   REGEN_PER_SECOND, FALL_DAMAGE_MIN_SPEED, FALL_DAMAGE_PER_SPEED,
-  PLAYER_HEIGHT, PLAYER_RADIUS, EMPTY_ROOM_TTL_MS, LOBBY_GRACE_MS,
+  PLAYER_HEIGHT, PLAYER_RADIUS, EMPTY_ROOM_TTL_MS, LOBBY_GRACE_MS, MODE_ROUND_MS,
   BARREL_HITS, BARREL_DAMAGE, BARREL_RADIUS, BARREL_CHAIN_RADIUS, BARREL_CHAIN_LIMIT,
+  TEAMS, HEALTH_PACK_HEAL, HEALTH_PACK_RADIUS, HEALTH_PACK_RESPAWN_MS,
+  WAVE_BREAK_MS, WAVE_FIRST_DELAY_MS, WAVE_MAX_CONCURRENT,
+  WAVE_BASE_ENEMIES, WAVE_ENEMIES_PER_WAVE,
 } from '../shared/constants.js';
-import { S2C, PHASE, FLAG, MODES, encode, encodeSnapshot } from '../shared/protocol.js';
+import { S2C, PHASE, FLAG, MODES, encode, encodeSnapshot, sanitiseChat } from '../shared/protocol.js';
 import { getMap, nextMap, ROTATION } from '../shared/maps/index.js';
-import { getWeapon, CLASSES, DEFAULT_CLASS } from '../shared/weapons.js';
+import { PRIMARY_IDS, getPrimary } from '../shared/weapons.js';
 import { pushOutOfSolids, playerOverlapsAny, hasLineOfSight } from '../shared/collision.js';
 import * as modes from './modes.js';
+import { createAiPlayer, stepAi, aiName } from './ai.js';
+import {
+  createBrState, tickZone, zonePayload, lootList, takeLoot, aiZoneWaypoint,
+  aiConsiderLoot, aliveCount, soleSurvivor,
+} from './br.js';
 import { validateMove, validateHit, validateFireRate, capPelletCount, heightOf, eyeOf } from './validate.js';
 
 const TICK_MS = 1000 / SERVER_TICK_HZ;
@@ -37,9 +45,13 @@ export class Room {
     this.players = new Map();
     this.teamScores = { A: 0, B: 0 };
 
-    this.mapId = ROTATION[Math.floor(Math.random() * ROTATION.length)];
+    // Battle royale has exactly one map; the arena modes rotate.
+    this.mapId = modes.isBattleRoyale(mode)
+      ? 'island'
+      : ROTATION[Math.floor(Math.random() * ROTATION.length)];
     this.map = getMap(this.mapId);
     this.resetBarrels();
+    this.resetPickups();
 
     this.phase = PHASE.LOBBY;
     this.phaseEndsAt = 0;
@@ -58,6 +70,16 @@ export class Room {
     // than roll straight into the next round.
     this.regroupRequests = new Set();
 
+    // AI bookkeeping. aiSpawned only ever increases, so bot names don't repeat
+    // within a room even as they're added and removed.
+    this.aiSpawned = 0;
+    this.aiSkill = 'normal';
+
+    // Survival state. Null in every other mode.
+    this.wave = null;
+    this.br = null;
+    this.botTarget = 0;
+
     this.timer = setInterval(() => this.tick(), TICK_MS);
     // Don't hold the process open on an idle room.
     this.timer.unref?.();
@@ -69,18 +91,51 @@ export class Room {
     return this.players.size;
   }
 
-  isFull() {
-    return this.players.size >= modes.ROOM_CAPACITY;
+  /**
+   * People, as opposed to players. Once AI can occupy slots, players.size stops
+   * meaning "is anyone here" — an all-bot room would never close and would never
+   * stop ticking. Everything about presence uses this instead.
+   */
+  humanCount() {
+    let n = 0;
+    for (const p of this.players.values()) if (!p.isBot) n++;
+    return n;
   }
 
-  addPlayer({ id, name, ws, classId }) {
+  /**
+   * Humans needed to start. Survival is solo by design, and battle royale fills
+   * every empty slot with AI — so in both cases one person is a match.
+   */
+  minPlayers() {
+    if (modes.isSurvival(this.mode) || modes.isBattleRoyale(this.mode)) return 1;
+    return MIN_PLAYERS_TO_START;
+  }
+
+  humans() {
+    return [...this.players.values()].filter((p) => !p.isBot);
+  }
+
+  /** Slots in this room. Battle royale runs a thirty-player lobby. */
+  capacity() {
+    return modes.capacityFor(this.mode);
+  }
+
+  get tickMs() {
+    return TICK_MS;
+  }
+
+  isFull() {
+    return this.players.size >= this.capacity();
+  }
+
+  addPlayer({ id, name, ws, primaryId }) {
     const player = {
       id,
       name,
       ws,
       team: null,
       ready: false,
-      classId: CLASSES[classId] ? classId : DEFAULT_CLASS,
+      primaryId: getPrimary(primaryId),
       pos: [0, 0, 0],
       yaw: 0,
       pitch: 0,
@@ -102,6 +157,7 @@ export class Room {
       lastKilledBy: null,
       joinedAt: Date.now(),
       rejectedMoves: 0,
+      chatTimes: [],
     };
 
     this.players.set(id, player);
@@ -117,7 +173,7 @@ export class Room {
       code: this.code,
       mode: this.mode,
       mapId: this.mapId,
-      you: { id, team: player.team, classId: player.classId },
+      you: { id, team: player.team, primaryId: player.primaryId },
       phase: this.phase,
       phaseMsLeft: Math.max(0, this.phaseEndsAt - Date.now()),
       roster: this.roster(),
@@ -126,6 +182,9 @@ export class Room {
       lobby: this.lobbyState(),
       // Barrels already destroyed, so a latecomer doesn't see ones that are gone.
       barrelsGone: this.destroyedBarrels(),
+      pickupsTaken: this.takenPickups(),
+      loot: this.br ? lootList(this.br) : null,
+      zone: this.br ? zonePayload(this.br) : null,
     });
 
     this.broadcastRoster();
@@ -144,8 +203,8 @@ export class Room {
     // Someone who has left shouldn't still be holding the room in the lobby.
     this.regroupRequests.delete(id);
 
-    if (this.players.size === 0) {
-      // Last one out: end the match and mark the room for immediate closure.
+    if (this.humanCount() === 0) {
+      // Last human out: end the match and mark the room for immediate closure.
       // Previously it sat in the lobby for a 60s TTL, still ticking 20 times a
       // second and still holding its code, which is a slow leak on a server
       // that's meant to be one small always-on instance.
@@ -175,7 +234,8 @@ export class Room {
    * going through removePlayer.
    */
   isExpired(now = Date.now()) {
-    if (this.players.size > 0) return false;
+    // Bots don't keep a room alive.
+    if (this.humanCount() > 0) return false;
     if (this.empty) return true;
     return this.emptySince > 0 && now - this.emptySince > EMPTY_ROOM_TTL_MS;
   }
@@ -190,9 +250,10 @@ export class Room {
     return [...this.players.values()].map((p) => ({
       id: p.id,
       name: p.name,
+      isBot: !!p.isBot,
       team: p.team,
       ready: p.ready,
-      classId: p.classId,
+      primaryId: p.primaryId,
       score: p.score,
       kills: p.kills,
       deaths: p.deaths,
@@ -211,6 +272,7 @@ export class Room {
 
     let next = null;
     for (const p of this.players.values()) {
+      if (p.isBot) continue; // a bot can't pick the map
       if (!next || p.joinedAt < next.joinedAt) next = p;
     }
     this.hostId = next?.id ?? null;
@@ -228,8 +290,10 @@ export class Room {
       mode: this.mode,
       mapId: this.mapId,
       hostId: this.hostId,
-      capacity: modes.ROOM_CAPACITY,
-      minPlayers: MIN_PLAYERS_TO_START,
+      capacity: this.capacity(),
+      minPlayers: this.minPlayers(),
+      bots: this.players.size - this.humanCount(),
+      maxBots: Math.max(0, this.capacity() - this.humanCount()),
       startsInMs: this.graceEndsAt > 0 ? Math.max(0, this.graceEndsAt - Date.now()) : 0,
       roster: this.roster(),
     };
@@ -315,7 +379,9 @@ export class Room {
     const players = [...this.players.values()];
     const readyCount = players.filter((p) => p.ready).length;
 
-    if (players.length < MIN_PLAYERS_TO_START) {
+    // Counted in humans, and against this mode's minimum — survival is a solo
+    // mode, so a global "needs two people" would make it unstartable.
+    if (this.humanCount() < this.minPlayers()) {
       this.graceEndsAt = 0;
       this.broadcastLobby();
       return;
@@ -326,7 +392,7 @@ export class Room {
       return;
     }
 
-    if (readyCount >= MIN_PLAYERS_TO_START) {
+    if (readyCount >= this.minPlayers()) {
       if (this.graceEndsAt === 0) this.graceEndsAt = Date.now() + DURATION.lobbyGrace;
     } else {
       // Dropped back below quorum — somebody un-readied, or left.
@@ -353,7 +419,7 @@ export class Room {
   handleStart(player) {
     if (this.phase !== PHASE.LOBBY) return;
     if (!this.isHost(player)) return;
-    if (this.players.size < MIN_PLAYERS_TO_START) return;
+    if (this.humanCount() < this.minPlayers()) return;
     this.startCountdown();
   }
 
@@ -377,6 +443,19 @@ export class Room {
 
       // Gun Game hands out one weapon and the others hand out three, so the
       // loadout everyone was told about at join time is now wrong.
+      // The map has to follow the mode: battle royale plays the island and
+      // nothing else, and the arena modes can't play the island at all.
+      const wantedMap = modes.mapForMode(this.mode, this.mapId);
+      if (wantedMap !== this.mapId) {
+        this.mapId = wantedMap;
+        this.map = getMap(this.mapId);
+        this.resetBarrels();
+        this.resetPickups();
+      }
+      // Switching out of battle royale leaves bots behind that a normal lobby
+      // never asked for.
+      if (!modes.isBattleRoyale(this.mode)) this.removeAiPlayers(Math.max(0, (this.players.size - this.humanCount()) - this.botTarget));
+
       for (const p of this.players.values()) {
         p.ladderIndex = 0;
         p.inventory = modes.loadoutFor(this, p);
@@ -397,8 +476,20 @@ export class Room {
 
   beginRound() {
     modes.resetScores(this);
+
+    // Wipe the previous round's mode state before installing this round's.
+    // Without this, switching out of battle royale left this.br set, so the old
+    // zone kept closing and damaging people through an entire Team Deathmatch —
+    // and switching out of survival left this.wave set, quietly spawning enemy
+    // bots into a Free-for-all. Each mode's state is installed below; nothing
+    // should survive a round it wasn't started for.
+    this.wave = null;
+    this.br = null;
+
     this.resetBarrels();
+    this.resetPickups();
     this.broadcast(S2C.BARRELS, { gone: [] });
+    this.broadcast(S2C.PICKUPS, { taken: [] });
     this.graceEndsAt = 0;
     this.regroupRequests.clear();
     for (const p of this.players.values()) {
@@ -408,8 +499,10 @@ export class Room {
       this.spawn(p); // resolves the loadout from their class
 
     }
+    if (modes.isSurvival(this.mode)) this.startSurvival();
+    if (modes.isBattleRoyale(this.mode)) this.startBattleRoyale();
     this.broadcastRoster();
-    this.setPhase(PHASE.LIVE, DURATION.round);
+    this.setPhase(PHASE.LIVE, this.roundMs());
   }
 
   endRound(result) {
@@ -437,6 +530,337 @@ export class Room {
     else this.regroupRequests.delete(player.id);
 
     this.broadcast(S2C.PHASE, this.phasePayload());
+  }
+
+  // ------------------------------------------------------------ battle royale
+
+  startBattleRoyale() {
+    // Fill every empty slot with an AI. A thirty-player match with four people in
+    // it is the whole point of having bots.
+    const missing = this.capacity() - this.players.size;
+    for (let i = 0; i < missing; i++) this.addAiPlayer({ team: null });
+
+    // Spawn the ones just added. addAiPlayer only spawns when the room is already
+    // LIVE, and during beginRound it isn't yet — so without this every bot stays
+    // dead, the human is the only one standing, and the sole-survivor check ends
+    // the match before it begins.
+    for (const p of this.players.values()) {
+      if (!p.alive) this.spawn(p);
+    }
+
+    this.br = createBrState(this.map);
+    this.broadcast(S2C.LOOT, { all: lootList(this.br) });
+    this.broadcast(S2C.ZONE, zonePayload(this.br));
+    this.broadcastAlive();
+    this.systemChat(`${this.players.size} players. Last one standing.`);
+  }
+
+  broadcastAlive() {
+    this.broadcast(S2C.ALIVE, { alive: aliveCount(this), total: this.players.size });
+  }
+
+  handleTakeLoot(player) {
+    if (!this.br || this.phase !== PHASE.LIVE) return;
+    takeLoot(this, this.br, player);
+  }
+
+  tickBattleRoyale(now) {
+    if (!this.br) return;
+
+    if (tickZone(this, this.br, now)) {
+      // Only when it actually moved: the zone spends most of its time holding.
+      this.broadcast(S2C.ZONE, zonePayload(this.br, now));
+    }
+
+    // One left: that's the match.
+    const survivor = soleSurvivor(this);
+    if (survivor && this.players.size > 1) {
+      this.br.winnerId = survivor.id;
+      survivor.score += 10;
+      this.endRound({ reason: 'br', winnerId: survivor.id, winnerName: survivor.name });
+    }
+  }
+
+  // ------------------------------------------------------------------ survival
+  //
+  // Escalating waves of AI. Enemies never respawn — clearing the wave is the goal
+  // — and humans are revived only at the top of the next wave, so going down means
+  // sitting out until your team clears it. If nobody is left standing, the run is
+  // over and the score is how many waves you got through.
+
+  startSurvival() {
+    this.removeAiPlayers();
+    this.wave = {
+      number: 0,
+      state: 'break',
+      nextAt: Date.now() + WAVE_FIRST_DELAY_MS,
+      toSpawn: 0,
+      spawned: 0,
+      nextSpawnAt: 0,
+    };
+    this.broadcastWave();
+  }
+
+  waveEnemyCount(n) {
+    return WAVE_BASE_ENEMIES + (n - 1) * WAVE_ENEMIES_PER_WAVE;
+  }
+
+  waveSkill(n) {
+    if (n < 3) return 'easy';
+    if (n < 7) return 'normal';
+    return 'hard';
+  }
+
+  aliveEnemies() {
+    let n = 0;
+    for (const p of this.players.values()) if (p.isBot && p.alive) n++;
+    return n;
+  }
+
+  broadcastWave() {
+    if (!this.wave) return;
+    const w = this.wave;
+    this.broadcast(S2C.WAVE, {
+      number: w.number,
+      state: w.state,
+      enemiesLeft: this.aliveEnemies() + Math.max(0, w.toSpawn - w.spawned),
+      msToNext: w.state === 'break' ? Math.max(0, w.nextAt - Date.now()) : 0,
+    });
+  }
+
+  tickWaves(now) {
+    const w = this.wave;
+    if (!w) return;
+
+    // Everyone down: the run ends here.
+    if (!this.humans().some((p) => p.alive) && w.number > 0) {
+      this.endRound(modes.resultAtTimeUp(this));
+      return;
+    }
+
+    if (w.state === 'break') {
+      if (now < w.nextAt) return;
+      w.number += 1;
+      w.toSpawn = this.waveEnemyCount(w.number);
+      w.spawned = 0;
+      w.nextSpawnAt = 0;
+      w.state = 'active';
+      this.aiSkill = this.waveSkill(w.number);
+      // A new wave puts everyone back on their feet.
+      for (const p of this.humans()) if (!p.alive) this.spawn(p);
+      this.systemChat(`Wave ${w.number} — ${w.toSpawn} incoming`);
+      this.broadcastWave();
+      return;
+    }
+
+    // Trickle enemies in rather than dumping the whole wave at once: a wall of
+    // twelve bots appearing together is a spike, not a fight.
+    if (w.spawned < w.toSpawn && this.aliveEnemies() < WAVE_MAX_CONCURRENT && now >= w.nextSpawnAt) {
+      this.addAiPlayer({ team: TEAMS.B, skill: this.aiSkill });
+      w.spawned += 1;
+      w.nextSpawnAt = now + 700;
+      this.broadcastWave();
+    }
+
+    if (w.spawned >= w.toSpawn && this.aliveEnemies() === 0) {
+      // Sweep the corpses so the roster doesn't grow without bound over a long run.
+      this.removeAiPlayers();
+      w.state = 'break';
+      w.nextAt = now + WAVE_BREAK_MS;
+      this.systemChat(`Wave ${w.number} cleared`);
+      this.broadcastWave();
+    }
+  }
+
+  // ----------------------------------------------------------------------- ai
+
+  addAiPlayer({ primaryId, team, skill } = {}) {
+    const bot = createAiPlayer({
+      name: aiName(this.aiSpawned++),
+      primaryId: primaryId ?? modes.randomPrimaryId(),
+      team: team ?? null,
+      skill: skill ?? this.aiSkill ?? 'normal',
+    });
+    this.players.set(bot.id, bot);
+    if (team === undefined && modes.isTeamMode(this.mode)) bot.team = modes.assignTeam(this, bot);
+    bot.inventory = modes.loadoutFor(this, bot);
+    bot.weapon = bot.inventory[0];
+    if (this.phase === PHASE.LIVE) this.spawn(bot);
+    this.broadcastRoster();
+    return bot;
+  }
+
+  removeAiPlayers(count = Infinity) {
+    let removed = 0;
+    for (const [id, p] of [...this.players]) {
+      if (!p.isBot || removed >= count) continue;
+      this.players.delete(id);
+      removed++;
+    }
+    if (removed) this.broadcastRoster();
+    return removed;
+  }
+
+  /**
+   * Host sets how many AI opponents to play against. Applied immediately so the
+   * lobby shows them in the slots before the round starts.
+   */
+  handleSetBots(player, msg) {
+    if (!this.isHost(player)) return;
+    if (modes.isSurvival(this.mode)) return; // survival manages its own enemies
+
+    const capacity = this.capacity() - this.humanCount();
+    const want = Math.max(0, Math.min(capacity, Math.floor(Number(msg.n) || 0)));
+    this.botTarget = want;
+
+    let current = this.players.size - this.humanCount();
+    while (current > want) {
+      this.removeAiPlayers(current - want);
+      current = this.players.size - this.humanCount();
+    }
+    while (current < want) {
+      this.addAiPlayer();
+      current += 1;
+    }
+    this.broadcastLobby();
+  }
+
+  /** Where an AI should walk. Battle royale overrides it to respect the zone. */
+  aiWaypointHint(bot) {
+    if (this.br) return aiZoneWaypoint(this.br, bot);
+    return null;
+  }
+
+  /** Whether an AI is allowed to shoot at someone. Modes override the details. */
+  aiCanTarget(bot, other) {
+    return modes.canDamage(this, bot, other);
+  }
+
+  /** Tell clients an AI fired, so it gets a tracer, a bang and a radar blip. */
+  broadcastAiShot(bot, from, to) {
+    const dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2];
+    const len = Math.hypot(dx, dy, dz) || 1;
+    this.broadcast(S2C.SHOTS, {
+      id: bot.id,
+      w: bot.weapon,
+      o: from.map((v) => Math.round(v * 100) / 100),
+      d: [dx / len, dy / len, dz / len].map((v) => Math.round(v * 1000) / 1000),
+    });
+  }
+
+  stepAllAi(dt, now) {
+    for (const p of this.players.values()) {
+      if (!p.isBot || !p.alive) continue;
+      stepAi(this, p, dt, now);
+      // Battle royale: bots pick up guns they walk over, or they fight the whole
+      // match with the pistol they landed with.
+      if (this.br) aiConsiderLoot(this, this.br, p);
+    }
+  }
+
+  // --------------------------------------------------------------------- chat
+
+  /**
+   * Relay a chat line.
+   *
+   * Rate-limited per player rather than per socket, because the point is to stop
+   * one person flooding everyone else's screen — the socket-level flood guard in
+   * index.js is about protecting the server, which is a different problem.
+   */
+  handleChat(player, msg) {
+    const text = sanitiseChat(msg.t);
+    if (!text) return;
+
+    const now = Date.now();
+    player.chatTimes = player.chatTimes.filter((t) => now - t < 6000);
+    if (player.chatTimes.length >= 5) return;
+    player.chatTimes.push(now);
+
+    // Team chat only means anything when there are teams.
+    const teamOnly = !!msg.team && modes.isTeamMode(this.mode) && !!player.team;
+    const payload = {
+      id: player.id,
+      name: player.name,
+      team: player.team,
+      text,
+      teamOnly,
+    };
+
+    if (!teamOnly) {
+      this.broadcast(S2C.CHAT, payload);
+      return;
+    }
+    for (const p of this.players.values()) {
+      if (p.team === player.team) this.sendTo(p, S2C.CHAT, payload);
+    }
+  }
+
+  /** A line from the server itself — joins, leaves, mode changes. */
+  systemChat(text) {
+    this.broadcast(S2C.CHAT, { system: true, text });
+  }
+
+  // ------------------------------------------------------------- health packs
+  //
+  // Server-authoritative, because they change health. Collected by proximity on
+  // the tick rather than by a client saying "I picked it up" — there's no aiming
+  // involved, so there's nothing the client knows that the server doesn't.
+
+  resetPickups() {
+    this.pickups = new Map();
+    for (const p of this.map.healthPacks) this.pickups.set(p.index, { takenUntil: 0 });
+  }
+
+  /** Indices currently collected, for syncing a joining client. */
+  takenPickups(now = Date.now()) {
+    const out = [];
+    for (const [index, state] of this.pickups ?? []) {
+      if (state.takenUntil > now) out.push(index);
+    }
+    return out;
+  }
+
+  tickPickups(now) {
+    if (!this.pickups) return;
+
+    for (const pack of this.map.healthPacks) {
+      const state = this.pickups.get(pack.index);
+      if (!state) continue;
+
+      // Respawn.
+      if (state.takenUntil > 0 && now >= state.takenUntil) {
+        state.takenUntil = 0;
+        this.broadcast(S2C.PICKUP, { index: pack.index, taken: false });
+      }
+      if (state.takenUntil > now) continue;
+
+      for (const player of this.players.values()) {
+        if (!player.alive || player.health >= MAX_HEALTH) continue;
+        const d = Math.hypot(
+          player.pos[0] - pack.pos[0],
+          (player.pos[1] + PLAYER_HEIGHT * 0.4) - pack.pos[1],
+          player.pos[2] - pack.pos[2],
+        );
+        if (d > HEALTH_PACK_RADIUS + PLAYER_RADIUS) continue;
+
+        player.health = Math.min(MAX_HEALTH, player.health + HEALTH_PACK_HEAL);
+        // Topping up shouldn't also restart the regen clock's grace period.
+        state.takenUntil = now + HEALTH_PACK_RESPAWN_MS;
+        this.broadcast(S2C.PICKUP, {
+          index: pack.index,
+          taken: true,
+          by: player.id,
+          at: pack.pos,
+        });
+        this.sendTo(player, S2C.DAMAGE, {
+          self: true,
+          amount: 0,
+          heal: HEALTH_PACK_HEAL,
+          health: Math.round(player.health),
+        });
+        break; // one pack, one player
+      }
+    }
   }
 
   // ------------------------------------------------------------------ barrels
@@ -531,10 +955,28 @@ export class Room {
     }
   }
 
+  /**
+   * How long this mode's round runs. The env override still wins so a test can
+   * cycle rounds in seconds.
+   */
+  roundMs() {
+    if (process.env.ARENA_ROUND_MS) return Number(process.env.ARENA_ROUND_MS);
+    return MODE_ROUND_MS[this.mode] ?? ROUND_MS;
+  }
+
   rotateMap() {
+    // Battle royale always plays the island; the rotation is for the arena modes.
+    if (modes.isBattleRoyale(this.mode)) {
+      this.mapId = 'island';
+      this.map = getMap(this.mapId);
+      this.resetBarrels();
+      this.resetPickups();
+      return;
+    }
     this.mapId = nextMap(this.mapId);
     this.map = getMap(this.mapId);
     this.resetBarrels();
+    this.resetPickups();
   }
 
   /**
@@ -584,7 +1026,7 @@ export class Room {
 
   spawn(player) {
     // The loadout is resolved here, which is what makes "applies on your next
-    // spawn" true. A class chosen while alive only changes classId; this is the
+    // spawn" true. A class chosen while alive only changes primaryId; this is the
     // single place that turns a class into weapons, for the lobby, a respawn and
     // a gun-game promotion alike.
     player.inventory = modes.loadoutFor(this, player);
@@ -664,10 +1106,10 @@ export class Room {
    * chooses — and otherwise waits for your next spawn. Letting a live player
    * re-arm on demand would make every class the best class.
    */
-  handleSetClass(player, msg) {
-    const id = String(msg?.classId ?? '');
-    if (!CLASSES[id] || player.classId === id) return;
-    player.classId = id;
+  handleSetPrimary(player, msg) {
+    const id = String(msg?.primaryId ?? '');
+    if (!PRIMARY_IDS.includes(id) || player.primaryId === id) return;
+    player.primaryId = id;
 
     if (modes.usesClasses(this.mode) && !player.alive) {
       player.inventory = modes.loadoutFor(this, player);
@@ -675,7 +1117,7 @@ export class Room {
       this.sendTo(player, S2C.LOADOUT, {
         inventory: player.inventory,
         weapon: player.weapon,
-        classId: player.classId,
+        primaryId: player.primaryId,
       });
     }
 
@@ -777,7 +1219,10 @@ export class Room {
   killPlayer(victim, attacker, weaponId, headshot = false) {
     victim.alive = false;
     victim.health = 0;
-    victim.respawnAt = Date.now() + RESPAWN_DELAY_MS;
+    // No respawns in survival or battle royale: being killed is the end of your
+    // match, which is what makes either mode tense.
+    const noRespawn = modes.isSurvival(this.mode) || modes.isBattleRoyale(this.mode);
+    victim.respawnAt = noRespawn ? 0 : Date.now() + RESPAWN_DELAY_MS;
     victim.lastKilledBy = attacker?.name ?? null;
 
     const outcome = modes.onKill(this, attacker, victim, weaponId);
@@ -800,9 +1245,18 @@ export class Room {
       victimName: victim.name,
       weapon: weaponId,
       headshot,
+      // Where the victim finished. In a mode with no respawns that's the only
+      // score there is, so it rides along with the kill rather than needing its
+      // own message. aliveCount has already excluded the victim, hence the +1.
+      placed: noRespawn ? aliveCount(this) + 1 : 0,
     });
 
     this.broadcastRoster();
+
+    // The alive counter is the whole HUD in battle royale, and it only ever
+    // changes here. Without this it sat at "30 alive" for an entire match while
+    // twenty-nine people died in front of you.
+    if (modes.isBattleRoyale(this.mode)) this.broadcastAlive();
 
     const win = modes.checkWin(this);
     if (win) this.endRound(win);
@@ -837,7 +1291,7 @@ export class Room {
           this.regroupRequests.clear();
           this.rotateMap();
 
-          if (!regroup && this.players.size >= MIN_PLAYERS_TO_START) {
+          if (!regroup && this.humanCount() >= this.minPlayers()) {
             this.lastResult = null;
             this.setPhase(PHASE.COUNTDOWN, DURATION.countdown);
           } else {
@@ -857,6 +1311,12 @@ export class Room {
   }
 
   tickLive(now) {
+    // AI move and fight on the server's clock; there's no client to wait for.
+    this.stepAllAi(TICK_MS / 1000, now);
+    this.tickPickups(now);
+    if (this.wave) this.tickWaves(now);
+    if (this.br) this.tickBattleRoyale(now);
+
     for (const player of this.players.values()) {
       // Respawns.
       if (!player.alive && player.respawnAt > 0 && now >= player.respawnAt) {
