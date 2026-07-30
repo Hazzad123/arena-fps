@@ -10,6 +10,7 @@ import { VIEW_DISTANCE } from '@shared/constants.js';
 import { loadModel, instantiate } from './models.js';
 
 const UNIT_CUBE = new THREE.BoxGeometry(1, 1, 1);
+const SURFACE_PLANE = new THREE.PlaneGeometry(1, 1);
 const SKYBOX_FACES = ['px.png', 'nx.png', 'py.png', 'ny.png', 'pz.png', 'nz.png'];
 let skyboxPromise = null;
 
@@ -58,6 +59,17 @@ const TEXTURES = {
   cobbles: { file: 'cobbles', metres: 4, tint: 0.25 },
   redbrick: { file: 'redbrick', metres: 5, tint: 0.2 },
   concrete: { file: 'concrete', metres: 6, tint: 0.88 },
+  asphalt: { file: 'sbs/asphalt', metres: 7, tint: 0.42 },
+  sbsbrick: { file: 'sbs/brick', metres: 4.5, tint: 0.28 },
+  dirt: { file: 'sbs/dirt', metres: 5, tint: 0.36 },
+  grass: { file: 'sbs/grass', metres: 6, tint: 0.28 },
+  metal: { file: 'sbs/metal', metres: 5, tint: 0.58 },
+  pavers: { file: 'sbs/pavers', metres: 5, tint: 0.32 },
+  plaster: { file: 'sbs/plaster', metres: 5, tint: 0.72 },
+  roof: { file: 'sbs/roof', metres: 4.5, tint: 0.34 },
+  stone: { file: 'sbs/stone', metres: 5, tint: 0.38 },
+  water: { file: 'sbs/water', metres: 8, tint: 0.24 },
+  wood: { file: 'sbs/wood', metres: 4, tint: 0.42 },
 };
 
 /** Metres of world per texture tile, so tiling is consistent at any box size. */
@@ -106,13 +118,16 @@ function surfaceFor(solid, map) {
   const h = solid.max[1] - solid.min[1];
   const d = solid.max[2] - solid.min[2];
   const footprint = w * d;
+  const authored = map.materialTextures?.[solid.color];
 
   // Big and flat: a floor, a roof panel or a deck. Checked before the wall test,
   // because a 30x12 slab is a floor whatever its thickness — and Rooftops builds
   // its roofs 2.5m thick, which a tighter limit here skipped entirely.
-  if (h <= 3 && footprint >= 60) return map.groundTexture ?? 'concrete';
+  if (h <= 3 && footprint >= 60) return authored ?? map.groundTexture ?? 'concrete';
   // Big and upright: a wall.
-  if (h >= 2.5 && Math.max(w, d) >= 10 && Math.min(w, d) <= 3) return map.wallTexture ?? 'concrete';
+  if (h >= 2.5 && Math.max(w, d) >= 10 && Math.min(w, d) <= 3) {
+    return authored ?? map.wallTexture ?? 'concrete';
+  }
   return null;
 }
 
@@ -189,6 +204,20 @@ export function loadMap(world, map) {
   if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
 
   world.scene.add(mesh);
+
+  // Small boxes stay in the single instanced draw call, but they no longer have
+  // to stay untextured. One subtle material tile per face gives short wall
+  // sections, stair risers and cover a surface without replacing hundreds of
+  // instances with hundreds of draw calls. Instance colours still tint the map,
+  // so its authored palette is preserved.
+  const detail = getTexture(map.detailTexture ?? map.wallTexture ?? 'plaster');
+  detail.ready.then((source) => {
+    if (!source || !mesh.parent) return;
+    const map2 = source.clone();
+    map2.repeat.set(1, 1);
+    mesh.material.map = map2;
+    mesh.material.needsUpdate = true;
+  });
 
   // ---- atmosphere ----
   world.scene.background = new THREE.Color(map.skyColor);
@@ -295,42 +324,49 @@ function buildSurfaces(map, mesh) {
     const tint = new THREE.Color(0xffffff).lerp(new THREE.Color(solid.color), tex.tint);
 
     const layer = surfaceLayer(solid);
-    // Give every authored overlay a unique depth rank inside its layer. Two
-    // large island patches used to overlap on the same layer, so their equal
-    // offsets still fought even though both were safely above the ground.
-    const depthRank = layer > 0 ? layer * 2048 + index : 0;
     const material = new THREE.MeshLambertMaterial({
       color: tint,
       // Roads, runways and fields are collision-flush with the island floor.
-      // Rendering coplanar faces without an offset makes the depth buffer switch
-      // between them every frame (z-fighting). Pull authored overlays forward in
-      // depth while leaving their shared collision geometry untouched.
+      // A tiny bounded offset resolves the last sub-pixel tie. The old offset
+      // grew into the tens of thousands of depth units, which could pull a road
+      // in front of entire buildings when viewed from parachute altitude.
       polygonOffset: layer > 0,
-      polygonOffsetFactor: layer > 0 ? -layer : 0,
-      polygonOffsetUnits: layer > 0 ? -depthRank : 0,
+      polygonOffsetFactor: layer > 0 ? -1 : 0,
+      polygonOffsetUnits: layer > 0 ? -layer * 3 : 0,
     });
 
-    const box = new THREE.Mesh(UNIT_CUBE, material);
-    box.scale.set(w, h, d);
-    box.position.set(
-      (solid.min[0] + solid.max[0]) / 2,
-      // A few render-only millimetres separate overlays from the ground and
-      // from one another. This is too small to look raised, but unlike depth
-      // offset alone it remains stable on low-precision mobile GPUs.
-      (solid.min[1] + solid.max[1]) / 2 + layer * 0.006,
-      (solid.min[2] + solid.max[2]) / 2,
-    );
-    // Flush paint should receive lighting, not cast a second shadow a few
-    // millimetres above the collision floor.
-    box.castShadow = layer === 0;
-    box.receiveShadow = true;
-    group.add(box);
+    // Authored terrain paint only needs a top face. Drawing it as another full
+    // box put a second underside and four enormous side faces into the depth
+    // buffer; from a high drop those faces could obscure the buildings they
+    // surrounded. A real plane is both cheaper and unambiguous.
+    const surface = new THREE.Mesh(layer > 0 ? SURFACE_PLANE : UNIT_CUBE, material);
+    if (layer > 0) {
+      surface.scale.set(w, d, 1);
+      surface.rotation.x = -Math.PI / 2;
+      surface.position.set(
+        (solid.min[0] + solid.max[0]) / 2,
+        solid.max[1] + layer * 0.006,
+        (solid.min[2] + solid.max[2]) / 2,
+      );
+      surface.renderOrder = layer;
+      surface.castShadow = false;
+    } else {
+      surface.scale.set(w, h, d);
+      surface.position.set(
+        (solid.min[0] + solid.max[0]) / 2,
+        (solid.min[1] + solid.max[1]) / 2,
+        (solid.min[2] + solid.max[2]) / 2,
+      );
+      surface.castShadow = true;
+    }
+    surface.receiveShadow = true;
+    group.add(surface);
 
     tex.ready.then((source) => {
       // A map can rotate while the image request is in flight. An orphaned box
       // means its material has already been disposed; do not resurrect it or
       // leak a cloned texture into the next round.
-      if (!source || !group.parent || !box.parent) return;
+      if (!source || !group.parent || !surface.parent) return;
       const map2 = source.clone();
       map2.repeat.set(repeatU, repeatV);
       material.map = map2;
@@ -602,6 +638,7 @@ export function unloadMap(world) {
   if (!world.current) return;
   const { mesh, props, surfaces } = world.current;
   world.scene.remove(mesh);
+  mesh.material.map?.dispose();
   mesh.material.dispose();
   mesh.dispose();
   if (props) {
@@ -653,7 +690,10 @@ export function scorchBarrel(world, index) {
 }
 
 export function createCamera(fov) {
-  return new THREE.PerspectiveCamera(fov, window.innerWidth / window.innerHeight, 0.05, VIEW_DISTANCE);
+  // The world never needs to draw closer than the player's collision radius.
+  // Doubling the near plane materially improves depth precision across a 540m
+  // island, especially while looking down from the 92m battle-royale drop.
+  return new THREE.PerspectiveCamera(fov, window.innerWidth / window.innerHeight, 0.1, VIEW_DISTANCE);
 }
 
 export function createRenderer(canvas) {

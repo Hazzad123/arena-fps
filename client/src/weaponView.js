@@ -142,15 +142,16 @@ const MUZZLE = {
   knife: [0, 0, -0.3],
 };
 
-// Far enough forward that the stock isn't nearly touching the near plane, and
-// scaled down so the gun reads as held rather than worn.
-const HIP = new THREE.Vector3(0.17, -0.2, -0.92);
+// A proper lower-right shoulder pose: the stock stays near the player while the
+// barrel angles inward toward the crosshair. Long guns used to be pushed so far
+// down -Z that only a thin, end-on silhouette was visible.
+const HIP = new THREE.Vector3(0.21, -0.24, -1.0);
 // Aimed: centred horizontally but sitting LOW, so the receiver occupies the
 // bottom of the frame and the crosshair looks over the top of it. Putting the
 // gun's centreline on the crosshair (which is what "align the sights" naively
 // suggests) parks the receiver directly over whatever you're shooting at.
 const ADS = new THREE.Vector3(0.0, -0.19, -0.9);
-const VIEW_SCALE = 1.02;
+const VIEW_SCALE = 1.0;
 // Shrink a little while aimed, so it intrudes even less.
 const ADS_SCALE = 0.82;
 // Imported models vary wildly in height and bulk even after being fitted to
@@ -175,19 +176,21 @@ const WEAPON_VIEW_SCALE = {
   lmg: 1.01,
   knife: 1.1,
 };
-// Keep a restrained three-quarter angle: enough to read the receiver and stock,
-// but well short of the old pose that made long guns lean hard to the right.
-const BASE_YAW = -0.2;
+// Positive yaw turns a gun held on the right inward, putting its muzzle near the
+// crosshair and its receiver at the lower-right. The old negative values turned
+// the muzzle farther right and made the whole weapon look as if it were falling
+// out of the player's hands.
+const BASE_YAW = 0.24;
 const WEAPON_POSE_YAW = {
-  pistol: -0.21,
-  revolver: -0.22,
-  machinepistol: -0.2,
-  shotgun: -0.2,
-  autoshotgun: -0.2,
-  dmr: -0.21,
-  sniper: -0.21,
-  antimateriel: -0.22,
-  lmg: -0.2,
+  pistol: 0.2,
+  revolver: 0.2,
+  machinepistol: 0.22,
+  shotgun: 0.22,
+  autoshotgun: 0.22,
+  dmr: 0.23,
+  sniper: 0.22,
+  antimateriel: 0.21,
+  lmg: 0.22,
 };
 // Every source pack uses a different unit scale. First-person guns are fitted to
 // a real silhouette length, uniformly, so a scope stays round and a stock does
@@ -215,16 +218,16 @@ const WEAPON_HIP_OFFSET = {
   pistol: [0.025, 0.02, 0.08],
   revolver: [0.025, 0.015, 0.07],
   machinepistol: [0.02, 0.01, 0.04],
-  rifle: [0.015, 0, -0.18],
-  carbine: [0.015, 0, -0.14],
-  bullpup: [0.015, 0, -0.13],
+  rifle: [0.015, 0, -0.08],
+  carbine: [0.015, 0, -0.06],
+  bullpup: [0.015, 0, -0.06],
   sawnoff: [0.01, 0.015, -0.04],
-  shotgun: [-0.025, 0.035, -0.34],
-  autoshotgun: [-0.025, 0.03, -0.3],
-  sniper: [0.03, 0.035, -0.43],
-  dmr: [0.01, 0.035, -0.34],
-  antimateriel: [0.02, 0.035, -0.5],
-  lmg: [-0.035, 0.025, -0.32],
+  shotgun: [-0.025, 0.035, -0.16],
+  autoshotgun: [-0.025, 0.03, -0.14],
+  sniper: [0.03, 0.035, -0.25],
+  dmr: [0.01, 0.035, -0.18],
+  antimateriel: [0.02, 0.035, -0.3],
+  lmg: [-0.035, 0.025, -0.17],
 };
 const BASE_PITCH = 0.02;
 
@@ -248,15 +251,15 @@ export function createWeaponView() {
   scene.add(camera);
 
   // Fixed studio lighting so the gun reads clearly on every map.
-  scene.add(new THREE.HemisphereLight(0xdfffee, 0x273128, 1.15));
+  scene.add(new THREE.HemisphereLight(0xecf5f2, 0x292b31, 0.9));
   // Flat dark MTL colours need a little frontal fill. Without it, faces turned
   // away from the key light collapse to black even though their material colour
   // loaded correctly.
-  scene.add(new THREE.AmbientLight(0xffffff, 0.52));
-  const key = new THREE.DirectionalLight(0xffefd0, 1.65);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+  const key = new THREE.DirectionalLight(0xffefd0, 1.3);
   key.position.set(-0.6, 1, 0.75);
   scene.add(key);
-  const rim = new THREE.DirectionalLight(0x46ffae, 0.72);
+  const rim = new THREE.DirectionalLight(0xaed8ff, 0.45);
   rim.position.set(1, -0.3, -0.6);
   scene.add(rim);
 
@@ -403,15 +406,19 @@ function fitGunModel(model, loaded, forward, weaponId) {
   pivot.position.sub(scaled.getCenter(new THREE.Vector3())).add(targetCentre);
 
   // Preserve authored colour separation but stop near-black OBJ materials from
-  // losing all detail in the corner of the screen.
+  // losing all detail in the corner of the screen. Lifting HSL lightness keeps
+  // walnut brown, blued steel and polymer grey distinct; blending every dark
+  // part toward the same green-grey used to make the entire gun look moulded
+  // from one piece of plastic.
   pivot.traverse((node) => {
     if (!node.isMesh) return;
     for (const material of Array.isArray(node.material) ? node.material : [node.material]) {
       if (!material?.color) continue;
-      const lightness = material.color.r + material.color.g + material.color.b;
-      if (lightness < 0.55) material.color.lerp(new THREE.Color(0x61736a), 0.38);
+      const hsl = {};
+      material.color.getHSL(hsl);
+      if (hsl.l < 0.18) material.color.setHSL(hsl.h, hsl.s, 0.18);
       if ('emissive' in material) {
-        material.emissive = material.color.clone().multiplyScalar(0.035);
+        material.emissive = material.color.clone().multiplyScalar(0.025);
         material.emissiveIntensity = 1;
       }
     }

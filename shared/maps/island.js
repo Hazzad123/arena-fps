@@ -47,6 +47,36 @@ const C = {
   stripe: 0xd7d2b8,
 };
 
+// Rendering-only material hints. Collision and gameplay still see ordinary
+// boxes; the client uses this palette map to give large walls, roofs and floors
+// the material they visually represent instead of painting every landmark with
+// the same concrete tile.
+const MATERIAL_TEXTURES = {
+  [C.ground]: 'grass',
+  [C.grassDark]: 'grass',
+  [C.grassLight]: 'grass',
+  [C.soil]: 'dirt',
+  [C.road]: 'asphalt',
+  [C.runway]: 'asphalt',
+  [C.wall]: 'plaster',
+  [C.wallAlt]: 'stone',
+  [C.brick]: 'sbsbrick',
+  [C.military]: 'metal',
+  [C.roof]: 'roof',
+  [C.concrete]: 'plaster',
+  [C.concreteDark]: 'plaster',
+  [C.stone]: 'stone',
+  [C.metal]: 'metal',
+  [C.rust]: 'metal',
+  [C.wood]: 'wood',
+  [C.crate]: 'wood',
+  [C.fence]: 'wood',
+  [C.water]: 'water',
+  [C.tree]: 'grass',
+  [C.trunk]: 'wood',
+  [C.stripe]: 'plaster',
+};
+
 const HALF = 270; // 540m across
 const CELL = 60;
 const GRID = 9; // 81 districts: enough space for genuinely separate landings
@@ -118,8 +148,9 @@ function roofStairs({ x, z, w, h, side = 'e', color = C.concrete, y = 0 }) {
 }
 
 /** A collision-flush coloured patch; layer is used only to stack its rendered mesh. */
-function surface(x, z, w, d, color, texture = 'concrete', layer = 1) {
-  return box(x, -0.08, z, w, 0.08, d, color, `surface:${texture}:${layer}`);
+function surface(x, z, w, d, color, texture = null, layer = 1) {
+  const material = texture ?? MATERIAL_TEXTURES[color] ?? 'plaster';
+  return box(x, -0.08, z, w, 0.08, d, color, `surface:${material}:${layer}`);
 }
 
 /** Perimeter walls with real openings rather than a sealed decorative compound. */
@@ -235,8 +266,8 @@ function crownCitadel() {
 
 function blackwaterDocks() {
   const out = [
-    surface(-214, 0, 92, 126, C.concreteDark),
-    surface(-255, 0, 10, 126, C.water, 'concrete', 2),
+    surface(-214, 0, 92, 126, C.concreteDark, 'pavers'),
+    surface(-255, 0, 10, 126, C.water, 'water', 2),
   ];
 
   out.push(...building({
@@ -267,7 +298,7 @@ function blackwaterDocks() {
 }
 
 function slateQuarry() {
-  const out = [surface(-176, -176, 98, 98, C.stone, 'concrete')];
+  const out = [surface(-176, -176, 98, 98, C.stone, 'dirt')];
   // Terraced square cuts, each broken at a different side. They read as a pit
   // while keeping the whole quarry traversable with ordinary movement.
   out.push(...compound({
@@ -294,7 +325,7 @@ function slateQuarry() {
 }
 
 function northwatchBase() {
-  const out = [surface(0, -194, 118, 74, C.military, 'concrete')];
+  const out = [surface(0, -194, 118, 74, C.military, 'pavers')];
   out.push(...compound({
     x: 0, z: -194, w: 110, d: 68, h: 3.2, color: C.military, gates: ['s', 'e'], gateW: 12,
   }));
@@ -322,7 +353,7 @@ function northwatchBase() {
 }
 
 function meridianPower() {
-  const out = [surface(176, -176, 102, 102, C.concreteDark)];
+  const out = [surface(176, -176, 102, 102, C.concreteDark, 'asphalt')];
   out.push(...compound({
     x: 176, z: -176, w: 96, d: 96, h: 2.4, color: C.metal, gates: ['w', 's'], gateW: 13,
   }));
@@ -347,7 +378,7 @@ function meridianPower() {
 }
 
 function pinewoodCamp() {
-  const out = [surface(198, 16, 92, 112, C.grassDark, 'concrete')];
+  const out = [surface(198, 16, 92, 112, C.grassDark, 'grass')];
   const trees = [
     [-34, -41, 1.1], [-18, -48, 0.9], [5, -44, 1.2], [28, -39, 1],
     [-38, -18, 0.85], [34, -14, 1.15], [-31, 10, 1.05], [38, 13, 0.9],
@@ -397,14 +428,14 @@ function sunfieldFarms() {
 }
 
 function switchbackYard() {
-  const out = [surface(0, 190, 142, 76, C.soil, 'concrete')];
+  const out = [surface(0, 190, 142, 76, C.soil, 'dirt')];
   // Three rail lines, with sleepers at intervals. They are flush decoration and
   // never snag movement.
   for (const z of [169, 187, 205]) {
-    out.push(surface(0, z - 1.6, 132, 0.35, C.metal, 'concrete', 3));
-    out.push(surface(0, z + 1.6, 132, 0.35, C.metal, 'concrete', 3));
+    out.push(surface(0, z - 1.6, 132, 0.35, C.metal, 'metal', 3));
+    out.push(surface(0, z + 1.6, 132, 0.35, C.metal, 'metal', 3));
     for (let x = -60; x <= 60; x += 8) {
-      out.push(surface(x, z, 3.5, 5, C.wood, 'concrete', 2));
+      out.push(surface(x, z, 3.5, 5, C.wood, 'wood', 2));
     }
   }
   out.push(...building({
@@ -424,15 +455,15 @@ function switchbackYard() {
 function falconAirfield() {
   const out = [
     surface(174, 180, 112, 126, C.grassLight),
-    surface(178, 181, 22, 118, C.runway, 'concrete', 2),
-    surface(216, 181, 28, 72, C.concreteDark, 'concrete', 2),
+    surface(178, 181, 22, 118, C.runway, 'asphalt', 2),
+    surface(216, 181, 28, 72, C.concreteDark, 'pavers', 2),
   ];
   // Runway threshold and centreline.
   for (let z = 131; z <= 231; z += 16) {
-    out.push(surface(178, z, 2.2, 8, C.stripe, 'concrete', 3));
+    out.push(surface(178, z, 2.2, 8, C.stripe, 'plaster', 3));
   }
   for (const x of [171, 178, 185]) {
-    out.push(surface(x, 126, 3, 12, C.stripe, 'concrete', 4));
+    out.push(surface(x, 126, 3, 12, C.stripe, 'plaster', 4));
   }
 
   out.push(...building({
@@ -495,12 +526,12 @@ function roads() {
     // Roads occupy their own layer band above local area decoration. Previously
     // the main north/south road shared layer 2 with railyard sleepers, leaving
     // small but very visible patches of z-fighting at every crossing.
-    surface(0, 0, 11, 500, C.road, 'concrete', 8),
-    surface(0, 0, 500, 11, C.road, 'concrete', 9),
-    surface(-174, 88, 9, 176, C.road, 'concrete', 10),
-    surface(174, 88, 9, 176, C.road, 'concrete', 11),
-    surface(-88, -176, 176, 9, C.road, 'concrete', 12),
-    surface(88, 176, 176, 9, C.road, 'concrete', 13),
+    surface(0, 0, 11, 500, C.road, 'asphalt', 8),
+    surface(0, 0, 500, 11, C.road, 'asphalt', 9),
+    surface(-174, 88, 9, 176, C.road, 'asphalt', 10),
+    surface(174, 88, 9, 176, C.road, 'asphalt', 11),
+    surface(-88, -176, 176, 9, C.road, 'asphalt', 12),
+    surface(88, 176, 176, 9, C.road, 'asphalt', 13),
   ];
 }
 
@@ -687,7 +718,9 @@ export default {
   ambientLight: 0.85,
   sunDirection: [0.4, 0.85, 0.35],
   sunIntensity: 1.1,
-  groundTexture: 'concrete',
+  detailTexture: 'plaster',
+  materialTextures: MATERIAL_TEXTURES,
+  groundTexture: 'grass',
   wallTexture: 'blockwork',
   bounds: { min: [-HALF - 12, -12, -HALF - 12], max: [HALF + 12, 130, HALF + 12] },
   boxes: BOXES,

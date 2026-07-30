@@ -126,9 +126,11 @@ the match.
 | `Character_Soldier` | remote players, with the kit's own animation clips | Toon Shooter Game Kit (Quaternius) |
 | 16 environment props | crates and solid cover in the maps, plus wall dressing | Toon Shooter Game Kit (Quaternius) |
 | 5 surface textures | floors and walls, tiled by world size | 50 Free Stylized Wall Textures |
+| 11 terrain and material textures | grass, dirt, roads, water, roofs, masonry, metal and wood | Tiny Texture Packs 1 & 2 (Screaming Brain Studios) |
 
-The Quaternius kit is **CC0** (public domain) — its `License.txt` says so
-explicitly. Shipped assets total ~4.5MB, none of it in the JS bundle.
+The Quaternius kit and both Screaming Brain Studios packs are **CC0** (public
+domain) — their `License.txt` files say so explicitly. Shipped assets total
+~6.2MB, none of it in the JS bundle.
 
 > **The wall-texture pack shipped without a licence file.** Four of the five
 > textures in `client/public/textures` derive from it. That's worth resolving
