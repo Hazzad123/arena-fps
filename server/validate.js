@@ -47,7 +47,7 @@ function finiteVec3(v) {
  * position in place rather than dropping the player — a brief stall looks much
  * better than a rubber-band across the map.
  */
-export function validateMove(player, incoming, map, dtSeconds) {
+export function validateMove(player, incoming, map, dtSeconds, maxSpeed = MAX_VALIDATED_SPEED) {
   if (!finiteVec3(incoming.pos) || !finite(incoming.yaw) || !finite(incoming.pitch)) {
     return { ok: false, reason: 'malformed' };
   }
@@ -69,7 +69,7 @@ export function validateMove(player, incoming, map, dtSeconds) {
   const horizontal = Math.hypot(dx, dz);
 
   const window = Math.max(dtSeconds, 0.05);
-  const allowed = MAX_VALIDATED_SPEED * window + MAX_TELEPORT;
+  const allowed = maxSpeed * window + MAX_TELEPORT;
 
   if (horizontal > allowed) {
     return { ok: false, reason: 'too-fast' };

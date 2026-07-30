@@ -231,6 +231,10 @@ function handleMessage(session, ws, msg) {
       if (session.room && session.player) session.room.handleTakeLoot(session.player);
       return;
 
+    case C2S.VEHICLE:
+      if (session.room && session.player) session.room.handleVehicle(session.player, msg);
+      return;
+
     case C2S.EMOTE:
       if (session.room && session.player) session.room.handleEmote(session.player, msg);
       return;

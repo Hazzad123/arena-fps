@@ -144,55 +144,87 @@ const MUZZLE = {
 
 // Far enough forward that the stock isn't nearly touching the near plane, and
 // scaled down so the gun reads as held rather than worn.
-const HIP = new THREE.Vector3(0.2, -0.18, -0.62);
+const HIP = new THREE.Vector3(0.17, -0.2, -0.92);
 // Aimed: centred horizontally but sitting LOW, so the receiver occupies the
 // bottom of the frame and the crosshair looks over the top of it. Putting the
 // gun's centreline on the crosshair (which is what "align the sights" naively
 // suggests) parks the receiver directly over whatever you're shooting at.
-const ADS = new THREE.Vector3(0.0, -0.175, -0.46);
-const VIEW_SCALE = 0.93;
+const ADS = new THREE.Vector3(0.0, -0.19, -0.9);
+const VIEW_SCALE = 1.02;
 // Shrink a little while aimed, so it intrudes even less.
-const ADS_SCALE = 0.76;
+const ADS_SCALE = 0.82;
 // Imported models vary wildly in height and bulk even after being fitted to
 // the procedural weapon's length. These values normalize their first-person
 // screen footprint while preserving the intended pistol/SMG/rifle hierarchy.
 const WEAPON_VIEW_SCALE = {
-  pistol: 1.15,
-  revolver: 1.25,
-  machinepistol: 1.15,
-  smg: 1.02,
+  pistol: 1.06,
+  revolver: 1.06,
+  machinepistol: 1.04,
+  smg: 1.03,
   smg_compact: 1.05,
   smg_heavy: 1.02,
-  rifle: 1,
-  carbine: 1.02,
-  bullpup: 1,
-  shotgun: 1,
-  sawnoff: 0.9,
-  autoshotgun: 0.95,
-  sniper: 1.08,
+  rifle: 1.03,
+  carbine: 1.04,
+  bullpup: 1.03,
+  shotgun: 1.02,
+  sawnoff: 1.06,
+  autoshotgun: 1.02,
+  sniper: 1.03,
   dmr: 1.03,
-  antimateriel: 1.1,
-  lmg: 1.02,
-  knife: 1.15,
+  antimateriel: 1.02,
+  lmg: 1.01,
+  knife: 1.1,
 };
 // A few degrees of yaw shows the gun in three-quarter view instead of flat
 // side-on, which reads much better. Purely cosmetic — shots follow the camera.
-const BASE_YAW = -0.1;
+const BASE_YAW = -0.3;
 const WEAPON_POSE_YAW = {
-  shotgun: -0.13,
-  autoshotgun: -0.13,
-  dmr: -0.145,
-  sniper: -0.16,
-  antimateriel: -0.18,
-  lmg: -0.135,
+  pistol: -0.43,
+  revolver: -0.45,
+  machinepistol: -0.42,
+  shotgun: -0.35,
+  autoshotgun: -0.35,
+  dmr: -0.37,
+  sniper: -0.39,
+  antimateriel: -0.41,
+  lmg: -0.36,
 };
-// Several long imported meshes have a chunky receiver and a short authored
-// barrel. Giving only their forward axis more room restores a recognisable rifle
-// silhouette without making the stock, scope and grip comically wide.
-const MODEL_LENGTH_MULT = {
-  dmr: 1.12,
+// Every source pack uses a different unit scale. First-person guns are fitted to
+// a real silhouette length, uniformly, so a scope stays round and a stock does
+// not turn into a pancake.
+const MODEL_LENGTH = {
+  pistol: 0.38,
+  revolver: 0.42,
+  machinepistol: 0.44,
+  smg: 0.64,
+  smg_compact: 0.6,
+  smg_heavy: 0.69,
+  rifle: 1.0,
+  carbine: 0.9,
+  bullpup: 0.88,
+  shotgun: 1.05,
+  sawnoff: 0.7,
+  autoshotgun: 0.96,
   sniper: 1.25,
-  antimateriel: 1.35,
+  dmr: 1.08,
+  antimateriel: 1.34,
+  lmg: 1.05,
+  knife: 0.46,
+};
+const WEAPON_HIP_OFFSET = {
+  pistol: [0.025, 0.02, 0.08],
+  revolver: [0.025, 0.015, 0.07],
+  machinepistol: [0.02, 0.01, 0.04],
+  rifle: [0.015, 0, -0.18],
+  carbine: [0.015, 0, -0.14],
+  bullpup: [0.015, 0, -0.13],
+  sawnoff: [0.01, 0.015, -0.04],
+  shotgun: [-0.025, 0.035, -0.34],
+  autoshotgun: [-0.025, 0.03, -0.3],
+  sniper: [0.03, 0.035, -0.43],
+  dmr: [0.01, 0.035, -0.34],
+  antimateriel: [0.02, 0.035, -0.5],
+  lmg: [-0.035, 0.025, -0.32],
 };
 const BASE_PITCH = 0.02;
 
@@ -200,10 +232,10 @@ const BASE_PITCH = 0.02;
 // of the world. Three reasons, all of which bite you if you parent the gun to
 // the main camera instead:
 //   - a 110° world FOV distorts a gun held 40cm from your face into a canoe;
-//     a fixed 55° view FOV keeps it looking the same at any FOV setting
+//     a fixed 50° view FOV keeps it looking the same at any FOV setting
 //   - it can never clip through a wall you're standing against
 //   - it needs its own lighting, not the map's (a gun in shadow reads as a bug)
-const VIEW_FOV = 55;
+const VIEW_FOV = 50;
 
 export function createWeaponView() {
   const scene = new THREE.Scene();
@@ -216,15 +248,15 @@ export function createWeaponView() {
   scene.add(camera);
 
   // Fixed studio lighting so the gun reads clearly on every map.
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x555560, 1.0));
+  scene.add(new THREE.HemisphereLight(0xdfffee, 0x273128, 1.15));
   // Flat dark MTL colours need a little frontal fill. Without it, faces turned
   // away from the key light collapse to black even though their material colour
   // loaded correctly.
-  scene.add(new THREE.AmbientLight(0xffffff, 0.45));
-  const key = new THREE.DirectionalLight(0xffffff, 1.5);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.52));
+  const key = new THREE.DirectionalLight(0xffefd0, 1.65);
   key.position.set(-0.6, 1, 0.75);
   scene.add(key);
-  const rim = new THREE.DirectionalLight(0x9fc4ff, 0.5);
+  const rim = new THREE.DirectionalLight(0x46ffae, 0.72);
   rim.position.set(1, -0.3, -0.6);
   scene.add(rim);
 
@@ -347,16 +379,13 @@ function fitGunModel(model, loaded, forward, weaponId) {
   const pivot = new THREE.Group();
   pivot.add(orientation);
 
-  const target = model.bounds;
-
   // Detached, so its world matrix is its local one and the box comes back in the
   // space it will be added into.
   pivot.updateMatrixWorld(true);
   const current = new THREE.Box3().setFromObject(pivot);
 
-  const targetSize = target.getSize(new THREE.Vector3());
   const currentSize = current.getSize(new THREE.Vector3());
-  if (currentSize.z <= 0 || targetSize.z <= 0) return null;
+  if (currentSize.z <= 0) return null;
 
   // A gun should be longer than it is wide once it's facing the right way. If it
   // isn't, its forward axis was never rotated — better to keep the boxes than to
@@ -366,12 +395,27 @@ function fitGunModel(model, loaded, forward, weaponId) {
     return null;
   }
 
-  pivot.scale.setScalar(targetSize.z / currentSize.z);
-  pivot.scale.z *= MODEL_LENGTH_MULT[weaponId] ?? 1;
+  pivot.scale.setScalar((MODEL_LENGTH[weaponId] ?? model.bounds.getSize(new THREE.Vector3()).z) / currentSize.z);
   pivot.updateMatrixWorld(true);
 
   const scaled = new THREE.Box3().setFromObject(pivot);
-  pivot.position.sub(scaled.getCenter(new THREE.Vector3())).add(target.getCenter(new THREE.Vector3()));
+  const targetCentre = model.bounds.getCenter(new THREE.Vector3());
+  pivot.position.sub(scaled.getCenter(new THREE.Vector3())).add(targetCentre);
+
+  // Preserve authored colour separation but stop near-black OBJ materials from
+  // losing all detail in the corner of the screen.
+  pivot.traverse((node) => {
+    if (!node.isMesh) return;
+    for (const material of Array.isArray(node.material) ? node.material : [node.material]) {
+      if (!material?.color) continue;
+      const lightness = material.color.r + material.color.g + material.color.b;
+      if (lightness < 0.55) material.color.lerp(new THREE.Color(0x61736a), 0.38);
+      if ('emissive' in material) {
+        material.emissive = material.color.clone().multiplyScalar(0.035);
+        material.emissiveIntensity = 1;
+      }
+    }
+  });
 
   return pivot;
 }
@@ -522,6 +566,12 @@ export function updateWeaponView(view, dt, now, player, lookDelta) {
   // every shooter and the reason the animation doesn't obscure your aim.
   const t = player.adsProgress * (1 - Math.min(1, reloadProgress * 2.2));
   const pos = HIP.clone().lerp(ADS, t);
+  const hipOffset = WEAPON_HIP_OFFSET[view.currentId];
+  if (hipOffset) {
+    pos.x += hipOffset[0] * (1 - t);
+    pos.y += hipOffset[1] * (1 - t);
+    pos.z += hipOffset[2] * (1 - t);
+  }
   pos.x += view.sway.x * (1 - t * 0.75);
   pos.y += view.sway.y * (1 - t * 0.75);
   pos.y -= reload.drop;
@@ -556,14 +606,14 @@ export function updateWeaponView(view, dt, now, player, lookDelta) {
   // A scoped sniper hides the model entirely — you're looking down the optic, and
   // the scope overlay provides the reticle instead.
   const scoped = isScoped(view.currentId, player.adsProgress) && reloadProgress === 0;
-  m.group.visible = !scoped && player.alive && !player.parachuting;
+  m.group.visible = !scoped && player.alive && !player.parachuting && player.vehicleId === null;
 
   if (now > view.flashUntil) m.flash.visible = false;
 }
 
 /** True when the view should switch to a scope overlay rather than a viewmodel. */
 export function isScoped(weaponId, adsProgress) {
-  return weaponId === 'sniper' && adsProgress > 0.75;
+  return (weaponId === 'sniper' || weaponId === 'antimateriel') && adsProgress > 0.75;
 }
 
 /**

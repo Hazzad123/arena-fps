@@ -103,6 +103,7 @@ export const BR_ZONE_PHASES = [
 ];
 export const BR_START_RADIUS = 365;
 export const BR_DROP_MS = 35_000; // parachute + looting grace before the first close
+export const BR_COMBAT_GRACE_MS = 28_000; // land and find a gun before anybody can deal damage
 export const BR_LOOT_COUNT = 180; // a large island needs multiple choices per district
 export const BR_LOOT_RADIUS = 1.6; // how close you must be to pick one up
 export const BR_DROP_HEIGHT = 92;
@@ -110,6 +111,11 @@ export const PARACHUTE_FALL_SPEED = 7;
 export const PARACHUTE_GLIDE_SPEED = 11;
 export const BR_VICTORY_MS = 8_000;
 export const BR_SCOREBOARD_MS = 25_000;
+export const VEHICLE_MAX_SPEED = 18;
+export const VEHICLE_REVERSE_SPEED = 8;
+export const VEHICLE_ACCEL = 14;
+export const VEHICLE_TURN_SPEED = 1.8;
+export const VEHICLE_USE_RADIUS = 4;
 
 // ---------------------------------------------------------------- health packs
 // Pickups are NOT part of map.solids — you walk over them, you don't bump into
@@ -130,8 +136,8 @@ export const SCOREBOARD_MS = 15_000;
 export const MIN_PLAYERS_TO_START = 2;
 export const MAX_PLAYERS = 8;
 // Battle royale runs a much bigger lobby on a much bigger map. Any unfilled slot
-// becomes an AI, so a room of two still plays a thirty-player match.
-export const BR_MAX_PLAYERS = 30;
+// becomes an AI, so a room of two still plays a forty-five-player match.
+export const BR_MAX_PLAYERS = 45;
 export const EMPTY_ROOM_TTL_MS = 60_000;
 
 // How long a lobby that already has enough players waits for the stragglers to

@@ -32,6 +32,10 @@ import {
   FALL_DAMAGE_PER_SPEED,
   PARACHUTE_FALL_SPEED,
   PARACHUTE_GLIDE_SPEED,
+  VEHICLE_MAX_SPEED,
+  VEHICLE_REVERSE_SPEED,
+  VEHICLE_ACCEL,
+  VEHICLE_TURN_SPEED,
 } from '@shared/constants.js';
 import {
   clampHorizontalSpeed, moveAndCollide, playerOverlapsAny, pushOutOfSolids,
@@ -54,6 +58,8 @@ export function createLocalPlayer() {
     health: MAX_HEALTH,
     alive: true,
     parachuting: false,
+    vehicleId: null,
+    vehicleSpeed: 0,
 
     // Weapons
     inventory: ['rifle', 'pistol', 'knife'],
@@ -102,6 +108,8 @@ export function spawnAt(p, point, solids, yaw = 0) {
   p.health = MAX_HEALTH;
   p.alive = true;
   p.parachuting = false;
+  p.vehicleId = null;
+  p.vehicleSpeed = 0;
   p.recoilPitch = 0;
   p.recoilYaw = 0;
   // Belt and braces against an authoring slip putting a spawn in a wall.
@@ -184,6 +192,10 @@ export function updateLocalPlayer(p, dt, solids, opts = {}) {
     return { fallDamage: 0, died: false };
   }
 
+  if (p.vehicleId !== null) {
+    return updateVehicleMovement(p, dt, solids, lethalFallY);
+  }
+
   updateCrouch(p, dt, solids);
 
   // ---- horizontal acceleration ----
@@ -231,6 +243,46 @@ export function updateLocalPlayer(p, dt, solids, opts = {}) {
   if (lethalFallY !== null && p.pos[1] < lethalFallY) died = true;
 
   return { fallDamage, died };
+}
+
+function updateVehicleMovement(p, dt, solids, lethalFallY) {
+  const axes = moveAxes();
+  const throttle = axes.z > 0.1 ? 1 : axes.z < -0.1 ? -1 : 0;
+  const target = throttle > 0
+    ? VEHICLE_MAX_SPEED
+    : throttle < 0 ? -VEHICLE_REVERSE_SPEED : 0;
+  const rate = throttle ? VEHICLE_ACCEL : VEHICLE_ACCEL * 1.8;
+  const delta = Math.max(-rate * dt, Math.min(rate * dt, target - p.vehicleSpeed));
+  p.vehicleSpeed += delta;
+
+  const speedFactor = Math.min(1, Math.abs(p.vehicleSpeed) / 4);
+  const reverse = p.vehicleSpeed < 0 ? -1 : 1;
+  p.yaw -= axes.x * VEHICLE_TURN_SPEED * speedFactor * reverse * dt;
+  if (p.yaw > Math.PI) p.yaw -= Math.PI * 2;
+  if (p.yaw < -Math.PI) p.yaw += Math.PI * 2;
+
+  p.vel[0] = -Math.sin(p.yaw) * p.vehicleSpeed;
+  p.vel[2] = -Math.cos(p.yaw) * p.vehicleSpeed;
+  p.vel[1] = Math.max(-MAX_FALL_SPEED, p.vel[1] + GRAVITY * dt);
+
+  const beforeX = p.pos[0];
+  const beforeZ = p.pos[2];
+  moveAndCollide(p, dt, solids, p.height, p.radius);
+  const moved = Math.hypot(p.pos[0] - beforeX, p.pos[2] - beforeZ);
+  if (Math.abs(p.vehicleSpeed) > 1 && moved < Math.abs(p.vehicleSpeed) * dt * 0.25) {
+    p.vehicleSpeed *= 0.35;
+  }
+
+  p.crouching = false;
+  p.crouchAmount = 0;
+  p.height = PLAYER_HEIGHT;
+  p.adsProgress += (0 - p.adsProgress) * Math.min(1, 12 * dt);
+  p.bobAmount += (0 - p.bobAmount) * Math.min(1, 12 * dt);
+
+  return {
+    fallDamage: 0,
+    died: lethalFallY !== null && p.pos[1] < lethalFallY,
+  };
 }
 
 function targetSpeed(p, axes, weapon) {

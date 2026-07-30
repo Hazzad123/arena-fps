@@ -7,7 +7,7 @@
 import * as THREE from 'three';
 import {
   PHYSICS_DT, MIN_FOV, MAX_FOV, TEAMS, RESPAWN_DELAY_MS, MAX_PLAYERS, BARREL_RADIUS,
-  BR_LOOT_RADIUS, EMOTE_COOLDOWN_MS, PITCH_LIMIT, PLAYER_HEIGHT,
+  BR_LOOT_RADIUS, EMOTE_COOLDOWN_MS, PITCH_LIMIT, PLAYER_HEIGHT, VEHICLE_USE_RADIUS,
 } from '@shared/constants.js';
 import { getMap, mapList } from '@shared/maps/index.js';
 import {
@@ -45,7 +45,9 @@ import {
   createRemotePlayers, syncRemotePlayers, clearRemotePlayers, hitboxesFrom, playRemoteEmote,
 } from './remotePlayers.js';
 import * as audio from './audio.js';
-import { createMinimap, drawMinimap, noteGunfire, clearMinimap } from './minimap.js';
+import {
+  createMinimap, drawMinimap, drawFullMap, noteGunfire, clearMinimap, toggleFullMap,
+} from './minimap.js';
 import {
   createPickups, loadPickups, setPickupTaken, syncPickups, updatePickups, clearPickups,
   collectLocally,
@@ -56,8 +58,11 @@ import {
 } from './chat.js';
 import {
   createBattleRoyale, setZone, setLoot, upsertLoot, removeLoot, nearestLoot,
-  updateBattleRoyale, clearBattleRoyale, isOutsideZone,
+  updateBattleRoyale, clearBattleRoyale, isOutsideZone, combatRemaining, zoneRemaining,
 } from './battleroyale.js';
+import {
+  createVehicles, setVehicles, clearVehicles, updateVehicles, nearestVehicle, vehicleForDriver,
+} from './vehicles.js';
 
 // ---------------------------------------------------------------------- setup
 
@@ -76,6 +81,7 @@ const connection = net.createNet();
 const minimap = createMinimap();
 const pickups = createPickups(world.scene);
 const royale = createBattleRoyale(world.scene);
+const vehicles = createVehicles(world.scene);
 
 // Chat has to cooperate with pointer lock: typing needs the lock released, but a
 // released lock is also what opens the pause menu, so the lock handler checks
@@ -130,6 +136,7 @@ const app = {
   placed: 0,
   lastCountdownBeep: -1,
   nearLoot: null,
+  nearVehicle: null,
   aliveCount: 0,
   aliveTotal: 0,
   // Camera shake, decayed every frame. Explosions are the only thing that sets
@@ -325,6 +332,7 @@ function applyMap(mapId) {
   clearMinimap(minimap);
   clearPickups(pickups);
   clearBattleRoyale(royale);
+  clearVehicles(vehicles);
   hud.setBattleRoyaleVisible(false);
 }
 
@@ -702,6 +710,25 @@ function renderLobby() {
       }
       dom['lobby-slots'].appendChild(col);
     }
+  } else if (m.mode === 'br') {
+    for (const participant of players) {
+      dom['lobby-slots'].appendChild(lobbySlot(participant, 'var(--accent)'));
+    }
+    const remaining = Math.max(0, capacity - players.length);
+    if (remaining > 0) {
+      const reserve = document.createElement('div');
+      reserve.className = 'slot br-reserve';
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      const text = document.createElement('span');
+      text.className = 'nm';
+      text.textContent = `${remaining} AI rival${remaining === 1 ? '' : 's'} deploy on launch`;
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = 'AUTO-FILL';
+      reserve.append(dot, text, tag);
+      dom['lobby-slots'].appendChild(reserve);
+    }
   } else {
     for (let i = 0; i < capacity; i++) {
       dom['lobby-slots'].appendChild(lobbySlot(players[i] ?? null, 'var(--accent)'));
@@ -857,6 +884,7 @@ net.on(connection, S2C.JOINED, (msg) => {
   syncPickups(pickups, msg.pickupsTaken);
   if (msg.loot) setLoot(royale, msg.loot);
   if (msg.zone) setZone(royale, msg.zone);
+  if (msg.vehicles) setVehicles(vehicles, msg.vehicles, true);
 
   if (msg.phase === PHASE.LIVE || msg.phase === PHASE.COUNTDOWN) enterMatch();
   else enterLobby();
@@ -1095,6 +1123,14 @@ net.on(connection, S2C.BR_WIN, (msg) => {
   audio.playFanfare(mine);
 });
 
+net.on(connection, S2C.VEHICLES, (msg) => {
+  if (msg.all) setVehicles(vehicles, msg.all, true);
+  if (msg.upsert) setVehicles(vehicles, msg.upsert);
+  const previous = player.vehicleId;
+  player.vehicleId = vehicleForDriver(vehicles, connection.myId);
+  if (previous !== null && player.vehicleId === null) player.vehicleSpeed = 0;
+});
+
 net.on(connection, S2C.PICKUP, (msg) => {
   setPickupTaken(pickups, msg.index, !!msg.taken);
   if (!msg.taken) return;
@@ -1272,6 +1308,13 @@ window.addEventListener('keydown', (e) => {
   // Don't hijack keys while a select or a text field has focus.
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName ?? '');
 
+  if (!typing && e.code === 'KeyM' && app.screen === 'match' && !pauseVisible()) {
+    e.preventDefault();
+    toggleFullMap(minimap);
+    audio.playClick();
+    return;
+  }
+
   // Enter opens chat in a match; Shift+Enter opens it in team mode. Handled here
   // rather than in input.js because input.js only sees keys while the pointer is
   // locked, and the whole point of chat is that it isn't.
@@ -1413,6 +1456,7 @@ function currentFlags() {
   if (input.firing) f |= FLAG.FIRING;
   if (!player.alive) f |= FLAG.DEAD;
   if (player.parachuting) f |= FLAG.PARACHUTE;
+  if (player.vehicleId !== null) f |= FLAG.VEHICLE;
   return f;
 }
 
@@ -1571,13 +1615,22 @@ function step(dt, now) {
   const spectatorState = app.screen === 'match' ? updateSpectator(worldStates) : null;
 
   const frozen = app.screen === 'match' && app.match.phase !== PHASE.LIVE;
-  if (input.locked && !frozen && !player.parachuting) handleFiring(now, worldStates);
+  const combatLocked = app.match.mode === 'br' && combatRemaining(royale, now) > 0;
+  if (input.locked && !frozen && !player.parachuting && player.vehicleId === null && !combatLocked) {
+    handleFiring(now, worldStates);
+  }
   handleEmoteInput(frozen, now);
 
   // E picks up the loot you're standing on. Battle royale only: it's the one mode
   // where what you're holding is found rather than chosen.
-  if (consumePressed('use') && app.match.mode === 'br' && app.nearLoot) {
-    net.send(connection, C2S.TAKE_LOOT, {});
+  if (consumePressed('use') && app.match.mode === 'br') {
+    if (player.vehicleId !== null) {
+      net.send(connection, C2S.VEHICLE, { i: player.vehicleId });
+    } else if (app.nearVehicle) {
+      net.send(connection, C2S.VEHICLE, { i: app.nearVehicle.index });
+    } else if (app.nearLoot) {
+      net.send(connection, C2S.TAKE_LOOT, {});
+    }
   }
 
   if (app.screen === 'practice' && consumePressed('resetPractice')) {
@@ -1638,6 +1691,17 @@ function step(dt, now) {
       roster: app.match.roster,
       zone: royale.active ? royale.zone : null,
     });
+    drawFullMap(minimap, {
+      map: app.map,
+      player,
+      states: worldStates,
+      myId: connection.myId,
+      mode: app.match.mode,
+      myTeam: app.match.myTeam,
+      roster: app.match.roster,
+      zone: royale.active ? royale.zone : null,
+      vehicles,
+    });
   }
 
   if (spectatorState) applySpectatorCamera(spectatorState);
@@ -1657,6 +1721,7 @@ function step(dt, now) {
   updateExplosions(explosions, now);
   updatePickups(pickups, now);
   updateBattleRoyale(royale, now, dt);
+  updateVehicles(vehicles, dt, worldStates, player, connection.myId);
 
   // The practice range has no server, so it collects its own health packs.
   if (app.screen === 'practice') {
@@ -1667,13 +1732,22 @@ function step(dt, now) {
   if (app.match.mode === 'br' && royale.active) {
     // Loot prompt: nearest pickup within arm's reach.
     app.nearLoot = player.alive ? nearestLoot(royale, player.pos, BR_LOOT_RADIUS + 0.6) : null;
-    hud.showLootPrompt(app.nearLoot);
+    app.nearVehicle = player.alive && player.vehicleId === null
+      ? nearestVehicle(vehicles, player.pos, VEHICLE_USE_RADIUS)
+      : null;
+    if (player.vehicleId !== null || app.nearVehicle) {
+      hud.showVehiclePrompt(app.nearVehicle, player.vehicleId !== null);
+    } else {
+      hud.showLootPrompt(app.nearLoot);
+    }
     hud.updateZone({
       state: royale.zone?.state,
-      msToNext: royale.zone?.msToNext ?? 0,
+      msToNext: zoneRemaining(royale, now),
       outside: player.alive && isOutsideZone(royale, player.pos),
       dps: royale.zone?.dps ?? 0,
       parachuting: player.parachuting,
+      combatMs: combatRemaining(royale, now),
+      pace: royale.zone?.pace ?? 1,
     });
   }
   app.shake *= Math.max(0, 1 - 6.5 * dt);
@@ -1781,7 +1855,7 @@ if (/^[A-Z0-9]{4}$/.test(hashCode)) {
 
 if (import.meta.env.DEV) {
   window.__arena = {
-    app, player, world, camera, weaponView, renderer, input, hud, connection, net, remotes,
+    app, player, world, camera, weaponView, renderer, input, hud, connection, net, remotes, vehicles,
     startPractice, leaveToMenu, handleFiring, step, enterMultiplayer,
     forceLock: (v) => { input.locked = v; },
     // Drive the loop by hand: a hidden tab pauses rAF, which is exactly the

@@ -36,9 +36,19 @@ export function createBattleRoyale(scene) {
 }
 
 export function setZone(br, zone) {
-  br.zone = zone;
+  br.zone = { ...zone, receivedAt: performance.now() };
   br.active = true;
   br.wall.visible = true;
+}
+
+export function combatRemaining(br, now = performance.now()) {
+  if (!br.zone) return 0;
+  return Math.max(0, (br.zone.combatMs ?? 0) - (now - br.zone.receivedAt));
+}
+
+export function zoneRemaining(br, now = performance.now()) {
+  if (!br.zone) return 0;
+  return Math.max(0, (br.zone.msToNext ?? 0) - (now - br.zone.receivedAt));
 }
 
 export function clearBattleRoyale(br) {

@@ -19,7 +19,7 @@
 
 import { box, crateStack, prop, barrel, stairs } from './helpers.js';
 import { compileBoxes, playerOverlapsAny } from '../collision.js';
-import { PLAYER_HEIGHT, PLAYER_RADIUS } from '../constants.js';
+import { BR_MAX_PLAYERS, PLAYER_HEIGHT, PLAYER_RADIUS } from '../constants.js';
 
 const C = {
   ground: 0x6f7a5c,
@@ -117,9 +117,9 @@ function roofStairs({ x, z, w, h, side = 'e', color = C.concrete, y = 0 }) {
   });
 }
 
-/** A flush coloured patch. Its top is exactly ground level, so it never trips movement. */
-function surface(x, z, w, d, color, texture = 'concrete') {
-  return box(x, -0.08, z, w, 0.08, d, color, `surface:${texture}`);
+/** A collision-flush coloured patch; layer is used only to stack its rendered mesh. */
+function surface(x, z, w, d, color, texture = 'concrete', layer = 1) {
+  return box(x, -0.08, z, w, 0.08, d, color, `surface:${texture}:${layer}`);
 }
 
 /** Perimeter walls with real openings rather than a sealed decorative compound. */
@@ -401,9 +401,11 @@ function switchbackYard() {
   // Three rail lines, with sleepers at intervals. They are flush decoration and
   // never snag movement.
   for (const z of [169, 187, 205]) {
-    out.push(surface(0, z - 1.6, 132, 0.35, C.metal));
-    out.push(surface(0, z + 1.6, 132, 0.35, C.metal));
-    for (let x = -60; x <= 60; x += 8) out.push(surface(x, z, 3.5, 5, C.wood));
+    out.push(surface(0, z - 1.6, 132, 0.35, C.metal, 'concrete', 3));
+    out.push(surface(0, z + 1.6, 132, 0.35, C.metal, 'concrete', 3));
+    for (let x = -60; x <= 60; x += 8) {
+      out.push(surface(x, z, 3.5, 5, C.wood, 'concrete', 2));
+    }
   }
   out.push(...building({
     x: -43, z: 219, w: 35, d: 13, h: 5, color: C.brick, doorSide: 'n', doorW: 6,
@@ -422,12 +424,16 @@ function switchbackYard() {
 function falconAirfield() {
   const out = [
     surface(174, 180, 112, 126, C.grassLight),
-    surface(178, 181, 22, 118, C.runway),
+    surface(178, 181, 22, 118, C.runway, 'concrete', 2),
     surface(216, 181, 28, 72, C.concreteDark),
   ];
   // Runway threshold and centreline.
-  for (let z = 131; z <= 231; z += 16) out.push(surface(178, z, 2.2, 8, C.stripe));
-  for (const x of [171, 178, 185]) out.push(surface(x, 126, 3, 12, C.stripe));
+  for (let z = 131; z <= 231; z += 16) {
+    out.push(surface(178, z, 2.2, 8, C.stripe, 'concrete', 3));
+  }
+  for (const x of [171, 178, 185]) {
+    out.push(surface(x, 126, 3, 12, C.stripe, 'concrete', 3));
+  }
 
   out.push(...building({
     x: 137, z: 154, w: 38, d: 24, h: 8, color: C.metal,
@@ -486,12 +492,12 @@ function ashChapelRuins() {
 /** Arterial routes make rotations legible and connect every major POI. */
 function roads() {
   return [
-    surface(0, 0, 11, 500, C.road),
-    surface(0, 0, 500, 11, C.road),
-    surface(-174, 88, 9, 176, C.road),
-    surface(174, 88, 9, 176, C.road),
-    surface(-88, -176, 176, 9, C.road),
-    surface(88, 176, 176, 9, C.road),
+    surface(0, 0, 11, 500, C.road, 'concrete', 2),
+    surface(0, 0, 500, 11, C.road, 'concrete', 3),
+    surface(-174, 88, 9, 176, C.road, 'concrete', 4),
+    surface(174, 88, 9, 176, C.road, 'concrete', 5),
+    surface(-88, -176, 176, 9, C.road, 'concrete', 6),
+    surface(88, 176, 176, 9, C.road, 'concrete', 7),
   ];
 }
 
@@ -561,7 +567,7 @@ function build() {
 }
 
 /**
- * Thirty spawns around the shoreline, each walked inward until it's clear of
+ * Battle-royale spawns around the shoreline, each walked inward until it's clear of
  * geometry.
  *
  * Computed rather than hand-placed because the districts are generated: a fixed
@@ -644,6 +650,26 @@ function healthPacks(boxes) {
   return out;
 }
 
+/** Road rovers are spread between districts, never inside authored cover. */
+function vehicleSpawns(boxes) {
+  const solids = compileBoxes(boxes);
+  const out = [];
+  const half = (GRID - 1) / 2;
+  const offsets = [[24, 24], [-24, -24], [24, -24], [-24, 24], [0, 25], [25, 0]];
+  for (let gx = 0; gx < GRID && out.length < 14; gx++) {
+    for (let gz = 0; gz < GRID && out.length < 14; gz++) {
+      if ((gx * 3 + gz * 5) % 6 !== 0) continue;
+      const cx = (gx - half) * CELL;
+      const cz = (gz - half) * CELL;
+      const point = offsets
+        .map(([dx, dz]) => [cx + dx, 0, cz + dz])
+        .find((p) => !playerOverlapsAny(p, PLAYER_HEIGHT, PLAYER_RADIUS, solids));
+      if (point) out.push(point);
+    }
+  }
+  return out;
+}
+
 const BOXES = build();
 
 export default {
@@ -664,9 +690,10 @@ export default {
   boxes: BOXES,
   healthPacks: healthPacks(BOXES),
   lootPoints: lootPoints(BOXES),
+  vehicleSpawns: vehicleSpawns(BOXES),
   spawns: {
     // Everyone starts on the shoreline and walks in.
-    ffa: ringSpawns(BOXES, 30, HALF - 14),
+    ffa: ringSpawns(BOXES, BR_MAX_PLAYERS, HALF - 14),
     // Battle royale has no teams, but the map tests check that A and B are far
     // apart, and they're right to: if anyone ever plays TDM here the two sides
     // should start on opposite shores, not four metres apart.

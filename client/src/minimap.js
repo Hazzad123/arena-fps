@@ -46,6 +46,7 @@ const COLORS = {
 
 export function createMinimap() {
   const canvas = document.getElementById('minimap-canvas');
+  const fullCanvas = document.getElementById('full-map-canvas');
   return {
     canvas,
     ctx: canvas?.getContext('2d') ?? null,
@@ -55,6 +56,10 @@ export function createMinimap() {
     bakedFor: null, // which map id it was baked from
     blips: [], // { x, z, until } gunfire marks
     contacts: new Map(), // id -> { x, z, until, team }
+    full: document.getElementById('full-map'),
+    fullCanvas,
+    fullCtx: fullCanvas?.getContext('2d') ?? null,
+    fullVisible: false,
   };
 }
 
@@ -121,6 +126,127 @@ export function clearMinimap(minimap) {
   minimap.areaLabel?.classList.add('hidden');
   minimap.baked = null;
   minimap.bakedFor = null;
+  setFullMapVisible(minimap, false);
+}
+
+export function setFullMapVisible(minimap, visible) {
+  minimap.fullVisible = !!visible;
+  minimap.full?.classList.toggle('hidden', !visible);
+}
+
+export function toggleFullMap(minimap) {
+  setFullMapVisible(minimap, !minimap.fullVisible);
+  return minimap.fullVisible;
+}
+
+/** Fixed-north tactical overview. It deliberately shares the radar's knowledge:
+ * contacts do not become wallhacks merely because the player pressed M. */
+export function drawFullMap(minimap, {
+  map, player, states, myId, mode, myTeam, roster, zone, vehicles,
+}) {
+  if (!minimap.fullVisible || !minimap.fullCtx || !map) return;
+  if (minimap.bakedFor !== map.id) bake(minimap, map);
+  const baked = minimap.baked;
+  if (!baked) return;
+
+  const ctx = minimap.fullCtx;
+  const canvas = minimap.fullCanvas;
+  const size = canvas.width;
+  const margin = 42;
+  const drawSize = size - margin * 2;
+  const ppm = drawSize / baked.span;
+  const worldX = (x) => margin + (x - baked.min[0]) * ppm;
+  const worldZ = (z) => margin + (z - baked.min[1]) * ppm;
+  const now = performance.now();
+
+  ctx.clearRect(0, 0, size, size);
+  ctx.fillStyle = '#06100d';
+  ctx.fillRect(0, 0, size, size);
+  ctx.globalAlpha = 0.82;
+  ctx.drawImage(baked.canvas, margin, margin, drawSize, drawSize);
+  ctx.globalAlpha = 1;
+
+  ctx.strokeStyle = 'rgba(57,255,163,.12)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 8; i++) {
+    const p = margin + (drawSize * i) / 8;
+    ctx.beginPath(); ctx.moveTo(p, margin); ctx.lineTo(p, size - margin); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(margin, p); ctx.lineTo(size - margin, p); ctx.stroke();
+  }
+
+  const ring = (centre, radius, stroke, width, dash = []) => {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = width;
+    ctx.setLineDash(dash);
+    ctx.beginPath();
+    ctx.arc(worldX(centre[0]), worldZ(centre[1]), radius * ppm, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  };
+  if (zone) {
+    if (zone.state === 'shrink' && zone.targetRadius < zone.radius) {
+      ring(zone.targetCentre, zone.targetRadius, 'rgba(255,190,72,.9)', 4, [12, 9]);
+    }
+    ring(zone.centre, zone.radius, 'rgba(57,255,163,.95)', 5);
+  }
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '700 20px ui-monospace, monospace';
+  for (const area of map.areas ?? []) {
+    const x = worldX(area.pos[0]);
+    const z = worldZ(area.pos[1]);
+    ctx.fillStyle = 'rgba(2,10,8,.76)';
+    const width = ctx.measureText(area.name.toUpperCase()).width + 18;
+    ctx.fillRect(x - width / 2, z - 13, width, 26);
+    ctx.fillStyle = 'rgba(174,255,218,.9)';
+    ctx.fillText(area.name.toUpperCase(), x, z);
+  }
+
+  ctx.fillStyle = '#ff654f';
+  for (const blip of minimap.blips) {
+    if (blip.until <= now) continue;
+    ctx.beginPath();
+    ctx.arc(worldX(blip.x), worldZ(blip.z), 6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  for (const [id, state] of states ?? []) {
+    if (id === myId || hasFlag(state.flags, FLAG.DEAD)) continue;
+    const info = roster?.get(id);
+    const friendly = mode === 'tdm' && info?.team === myTeam;
+    const memory = minimap.contacts.get(id);
+    if (!friendly && (!memory || memory.until <= now)) continue;
+    const pos = friendly ? state.pos : [memory.x, 0, memory.z];
+    ctx.fillStyle = friendly ? '#62b6ff' : '#ff654f';
+    ctx.beginPath();
+    ctx.arc(worldX(pos[0]), worldZ(pos[2]), 6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  for (const entry of vehicles?.entries?.values?.() ?? []) {
+    ctx.save();
+    ctx.translate(worldX(entry.group.position.x), worldZ(entry.group.position.z));
+    ctx.rotate(entry.group.rotation.y);
+    ctx.fillStyle = entry.driverId ? '#ffbd4a' : 'rgba(255,189,74,.72)';
+    ctx.fillRect(-5, -9, 10, 18);
+    ctx.restore();
+  }
+
+  const x = worldX(player.pos[0]);
+  const z = worldZ(player.pos[2]);
+  ctx.save();
+  ctx.translate(x, z);
+  ctx.rotate(player.yaw);
+  ctx.fillStyle = '#fff';
+  ctx.shadowColor = '#39ffa3';
+  ctx.shadowBlur = 12;
+  ctx.beginPath();
+  ctx.moveTo(0, -13); ctx.lineTo(9, 10); ctx.lineTo(0, 6); ctx.lineTo(-9, 10);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+
+  ctx.strokeStyle = 'rgba(57,255,163,.65)';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(margin, margin, drawSize, drawSize);
 }
 
 function updateAreaLabel(minimap, map, pos) {

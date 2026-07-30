@@ -10,7 +10,7 @@
 
 import {
   BR_ZONE_PHASES, BR_START_RADIUS, BR_DROP_MS, BR_LOOT_COUNT, BR_LOOT_RADIUS,
-  PLAYER_HEIGHT,
+  BR_COMBAT_GRACE_MS, PLAYER_HEIGHT,
 } from '../shared/constants.js';
 import { S2C } from '../shared/protocol.js';
 import { PRIMARY_IDS, WEAPONS, getWeapon } from '../shared/weapons.js';
@@ -68,6 +68,7 @@ function lootPayload(item) {
  * running inland.
  */
 export function createBrState(map) {
+  const now = Date.now();
   const points = [...map.lootPoints];
   // Shuffle and take a subset, so the same island has different loot each match
   // even though the *positions* are fixed and learnable.
@@ -83,6 +84,8 @@ export function createBrState(map) {
   }
 
   return {
+    startedAt: now,
+    combatStartsAt: now + BR_COMBAT_GRACE_MS,
     loot,
     zone: {
       centre: [0, 0],
@@ -92,7 +95,11 @@ export function createBrState(map) {
       targetRadius: BR_START_RADIUS,
       phase: -1, // -1 is the drop grace
       state: 'hold',
-      nextAt: Date.now() + BR_DROP_MS,
+      elapsedMs: 0,
+      durationMs: BR_DROP_MS,
+      lastTickAt: now,
+      nextAt: now + BR_DROP_MS,
+      pace: 1,
       dps: 0,
     },
     winnerId: null,
@@ -118,8 +125,45 @@ export function zonePayload(br, now = Date.now()) {
     state: z.state,
     phase: z.phase,
     msToNext: Math.max(0, z.nextAt - now),
+    combatMs: Math.max(0, br.combatStartsAt - now),
+    pace: z.pace,
     dps: z.dps,
   };
+}
+
+/** The final squads should be forced together instead of searching a huge island. */
+export function zonePaceForAlive(alive) {
+  if (alive <= 6) return 3.1;
+  if (alive <= 12) return 2.35;
+  if (alive <= 20) return 1.7;
+  if (alive <= 30) return 1.3;
+  return 1;
+}
+
+function targetPhaseForAlive(alive) {
+  if (alive <= 6) return 4;
+  if (alive <= 12) return 3;
+  if (alive <= 20) return 2;
+  if (alive <= 30) return 1;
+  return 0;
+}
+
+function beginShrink(z, phase, now) {
+  const next = BR_ZONE_PHASES[phase];
+  z.phase = phase;
+  z.state = 'shrink';
+  z.elapsedMs = 0;
+  z.durationMs = Math.max(1, next.shrinkMs);
+  z.shrinkFrom = { centre: [...z.centre], radius: z.radius };
+  z.targetRadius = next.radius;
+  const drift = Math.max(0, z.radius - next.radius) * 0.45;
+  const a = Math.random() * Math.PI * 2;
+  z.targetCentre = [
+    z.centre[0] + Math.cos(a) * drift * Math.random(),
+    z.centre[1] + Math.sin(a) * drift * Math.random(),
+  ];
+  z.dps = next.dps;
+  z.nextAt = now + z.durationMs / z.pace;
 }
 
 /**
@@ -131,34 +175,25 @@ export function zonePayload(br, now = Date.now()) {
 export function tickZone(room, br, now) {
   const z = br.zone;
   let changed = false;
+  const alive = aliveCount(room);
+  z.pace = zonePaceForAlive(alive);
+  const realElapsed = Math.max(0, Math.min(1000, now - (z.lastTickAt ?? now)));
+  z.lastTickAt = now;
+  z.elapsedMs = (z.elapsedMs ?? 0) + realElapsed * z.pace;
 
-  if (z.state === 'hold' && now >= z.nextAt) {
-    const next = BR_ZONE_PHASES[z.phase + 1];
-    if (next) {
-      z.phase += 1;
-      z.state = 'shrink';
-      z.shrinkFrom = { centre: [...z.centre], radius: z.radius };
-      z.targetRadius = next.radius;
-      // Pull the new centre somewhere inside the current circle, so the safe area
-      // drifts rather than always closing on the middle. Kept well inside so the
-      // next circle is always fully contained by this one.
-      const drift = Math.max(0, z.radius - next.radius) * 0.45;
-      const a = Math.random() * Math.PI * 2;
-      z.targetCentre = [
-        z.centre[0] + Math.cos(a) * drift * Math.random(),
-        z.centre[1] + Math.sin(a) * drift * Math.random(),
-      ];
-      z.shrinkStart = now;
-      z.nextAt = now + next.shrinkMs;
-      z.dps = next.dps;
+  if (z.state === 'hold' && z.elapsedMs >= z.durationMs) {
+    const desired = Math.max(z.phase + 1, targetPhaseForAlive(alive));
+    if (BR_ZONE_PHASES[desired]) {
+      beginShrink(z, desired, now);
       changed = true;
     } else {
-      z.nextAt = now + 5000; // final circle: stays put
+      z.elapsedMs = 0;
+      z.durationMs = 5000;
+      z.nextAt = now + 5000 / z.pace;
     }
   } else if (z.state === 'shrink') {
     const phase = BR_ZONE_PHASES[z.phase];
-    const span = Math.max(1, phase.shrinkMs);
-    const t = Math.min(1, (now - z.shrinkStart) / span);
+    const t = Math.min(1, z.elapsedMs / Math.max(1, z.durationMs));
     // Smoothstep, so the wall eases in and out rather than lurching.
     const e = t * t * (3 - 2 * t);
     z.radius = z.shrinkFrom.radius + (z.targetRadius - z.shrinkFrom.radius) * e;
@@ -170,9 +205,15 @@ export function tickZone(room, br, now) {
 
     if (t >= 1) {
       z.state = 'hold';
-      z.nextAt = now + phase.holdMs;
+      z.elapsedMs = 0;
+      z.durationMs = Math.max(1, phase.holdMs);
+      z.nextAt = now + z.durationMs / z.pace;
       changed = true;
     }
+  }
+
+  if (z.state === 'hold' || z.state === 'shrink') {
+    z.nextAt = now + Math.max(0, z.durationMs - z.elapsedMs) / z.pace;
   }
 
   // Damage outside. Applied per tick so it's a steady drain rather than a spike.
@@ -207,7 +248,7 @@ function gunScore(weaponId) {
  * Let AI pick up loot they happen to be standing near, if it beats what they hold.
  *
  * Without this, every bot spends the whole match on the starting pistol while the
- * humans find rifles — twenty-nine opponents who cannot meaningfully shoot back,
+ * humans find rifles — dozens of opponents who cannot meaningfully shoot back,
  * which makes the mode trivial rather than tense.
  */
 export function aiConsiderLoot(room, br, bot) {
@@ -258,7 +299,8 @@ export function aiZoneWaypoint(br, bot) {
   // replace a weak common later and stops them walking past an epic rifle just
   // because they already found an SMG.
   const holdingScore = gunScore(bot.inventory?.[0] ?? 'pistol');
-  if (z.phase < 3) {
+  const urgent = aiNeedsZone(br, bot);
+  if (!urgent && z.phase < 3) {
     let best = null;
     for (const item of br.loot.values()) {
       if (item.taken) continue;
@@ -275,13 +317,24 @@ export function aiZoneWaypoint(br, bot) {
     if (best) return [best.pos[0], bot.pos[1], best.pos[2]];
   }
 
-  // Comfortably inside: wander freely.
-  if (dist < z.radius * 0.62) return null;
-
-  // Otherwise head for a random point well within the safe circle.
+  // Never hand control back to the generic shoreline wanderer. Even while safe,
+  // a BR bot chooses another point in the playable circle so it cannot casually
+  // march back into the storm.
+  const safeRadius = Math.max(4, Math.min(z.radius, z.targetRadius ?? z.radius) * (urgent ? 0.38 : 0.66));
   const a = Math.random() * Math.PI * 2;
-  const r = z.radius * 0.45 * Math.random();
-  return [z.centre[0] + Math.cos(a) * r, bot.pos[1], z.centre[1] + Math.sin(a) * r];
+  const r = safeRadius * (urgent ? 0.35 : Math.sqrt(Math.random()));
+  const centre = z.state === 'shrink' ? z.targetCentre : z.centre;
+  return [centre[0] + Math.cos(a) * r, bot.pos[1], centre[1] + Math.sin(a) * r];
+}
+
+/** Outside, near the edge, or unable to reach the next circle at walking pace. */
+export function aiNeedsZone(br, bot) {
+  const z = br.zone;
+  const centre = z.state === 'shrink' ? z.targetCentre : z.centre;
+  const safeRadius = Math.min(z.radius, z.targetRadius ?? z.radius);
+  const distance = Math.hypot(bot.pos[0] - centre[0], bot.pos[2] - centre[1]);
+  const seconds = Math.max(0, z.nextAt - Date.now()) / 1000;
+  return distance > safeRadius * 0.72 || distance - safeRadius * 0.55 > seconds * 5.4;
 }
 
 /**

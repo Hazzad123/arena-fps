@@ -81,7 +81,7 @@ export function setBattleRoyaleVisible(visible) {
   el['br-zone'].classList.toggle('hidden', !visible);
   if (!visible) el['br-prompt'].classList.add('hidden');
   // The alive counter takes the top-right corner the killfeed normally owns, and
-  // battle royale is where the killfeed is busiest — thirty players means it's
+  // battle royale is where the killfeed is busiest — a full lobby means it's
   // never empty. Drop it below the counter for the duration.
   el.killfeed.classList.toggle('below-alive', !!visible);
 }
@@ -91,11 +91,17 @@ export function updateAlive(alive, total) {
   el['br-alive'].title = `${alive} of ${total} still standing`;
 }
 
-export function updateZone({ state, msToNext, outside, dps, parachuting = false }) {
+export function updateZone({
+  state, msToNext, outside, dps, parachuting = false, combatMs = 0, pace = 1,
+}) {
   const z = el['br-zone'];
   z.classList.toggle('danger', !!outside);
   if (parachuting) {
     z.textContent = 'PARACHUTING — steer with WASD and choose your landing';
+    return;
+  }
+  if (combatMs > 0) {
+    z.textContent = `WEAPONS UNLOCK IN ${Math.ceil(combatMs / 1000)}s — loot and reposition`;
     return;
   }
   if (outside) {
@@ -103,9 +109,10 @@ export function updateZone({ state, msToNext, outside, dps, parachuting = false 
     return;
   }
   const secs = Math.ceil(msToNext / 1000);
+  const pressure = pace > 1.5 ? ' · rapid close' : '';
   z.textContent = state === 'shrink'
-    ? `Zone closing — ${secs}s`
-    : `Zone holds for ${secs}s`;
+    ? `Zone closing — ${secs}s${pressure}`
+    : `Zone holds for ${secs}s${pressure}`;
 }
 
 export function showLootPrompt(loot) {
@@ -120,6 +127,20 @@ export function showLootPrompt(loot) {
   name.className = `tier-${loot.tier}`;
   name.textContent = `Pick up ${loot.name}`;
   p.append(key, name);
+}
+
+export function showVehiclePrompt(vehicle, driving = false) {
+  const p = el['br-prompt'];
+  const visible = driving || !!vehicle;
+  p.classList.toggle('hidden', !visible);
+  if (!visible) return;
+  p.innerHTML = '';
+  const key = document.createElement('span');
+  key.className = 'key';
+  key.textContent = 'E';
+  const label = document.createElement('span');
+  label.textContent = driving ? 'Exit rover' : 'Drive rover';
+  p.append(key, label);
 }
 
 /** The radar is match-only — the practice range has nobody to track. */
@@ -405,7 +426,7 @@ export function showResults(visible, data = null) {
     (teamMode ? '<th>Team</th>' : '') +
     '<th class="num">Score</th><th class="num">K</th><th class="num">D</th><th class="num">K/D</th></tr>';
 
-  // Battle royale puts thirty names in here. All thirty overflow the panel, and
+  // Battle royale puts dozens of names in here. They overflow the panel, and
   // the one row you actually care about — your own — ends up below the fold, where
   // pointer lock makes it awkward to scroll to. So past a dozen players it shows
   // the leaderboard and your own line, with a gap between.

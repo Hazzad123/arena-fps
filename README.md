@@ -2,7 +2,7 @@
 
 A browser multiplayer arena FPS for playing with coworkers. No accounts, no
 downloads, no install — share a link, pick a name, go. Three-minute rounds,
-three arena maps, up to eight players per arena room (30 in Battle Royale), plus
+six arena maps, up to eight players per arena room (45 in Battle Royale), plus
 a single-player practice range.
 
 **Desktop only.** It needs a mouse and a keyboard (pointer lock and mouse aim),
@@ -40,6 +40,7 @@ To let people on your network join without deploying, give them
 | Use / pick up | `E` |
 | Switch weapon | `1`–`8` |
 | Scoreboard | hold `Tab` |
+| Full tactical map | `M` |
 | Chat / team chat | `Enter` / `Shift` + `Enter` |
 | Emotes | `Z` wave · `X` yes · `V` no |
 | Reset practice targets | `T` |
@@ -50,8 +51,8 @@ To let people on your network join without deploying, give them
 **Modes.** Team Deathmatch (auto-balanced teams, friendly fire off),
 Free-for-all, Gun Game (every kill promotes you up
 pistol → SMG → shotgun → rifle → sniper → knife; win with a knife kill),
-co-op Survival waves, and a 30-player Battle Royale with ground loot and a
-closing zone.
+co-op Survival waves, and a 45-player Battle Royale with parachute drops, ground
+loot, drivable rovers, named districts, an adaptive closing zone and spectators.
 
 **Lobby.** Players gather up to the selected mode's capacity, shown as open
 slots — split by team in TDM — with everyone's ready state. It starts when
@@ -102,9 +103,9 @@ its own reticle rather than showing the gun. Reloads are animated (magazine out,
 fresh one seated — the shotgun cycles its pump, the sniper works its bolt) and
 pull you out of the aimed pose, so a reload never sits over your aim point.
 
-**Maps.** Warehouse (tight indoor lanes with catwalks), Rooftops (eight roofs
-separated by lethal gaps, one central tower), Alley (small, short sightlines,
-shotgun country). Maps rotate between rounds.
+**Maps.** Six competitive arenas rotate between rounds: Warehouse, Rooftops,
+Alley, Courtyard, Foundry and Switchyard. Battle Royale uses the much larger
+Crown Island, split into eleven named destinations.
 
 **Rooms.** Four-character codes from an alphabet with no `0`/`O`/`1`/`I`, because
 people read them out loud. Sharing `https://<host>/#ABCD` *is* the invite — the
@@ -230,7 +231,7 @@ shared/     imported by BOTH client and server, so they can't disagree
   constants.js   every number that affects feel
   weapons.js     weapon stat table
   protocol.js    message types + snapshot encoding
-  maps/          five maps, authored as arrays of boxes
+  maps/          six arenas, Crown Island and the practice range
 server/
   index.js       express + ws, room registry, matchmaking
   room.js        room state machine and 20Hz tick
@@ -252,7 +253,7 @@ procedural shapes if an asset is unavailable.
 **All sound is synthesised at runtime** with WebAudio — gunshots are a filtered
 noise burst plus a low sine thump. No audio files, no licences.
 
-**The viewmodel renders in its own scene** with its own 55° camera. A gun held
+**The viewmodel renders in its own scene** with its own 50° camera. A gun held
 40cm from your face through a 110° world FOV looks like a canoe, and it would
 clip through walls you stand against.
 

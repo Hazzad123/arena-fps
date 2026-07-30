@@ -10,7 +10,9 @@ import assert from 'node:assert/strict';
 
 import { getMap, MAP_IDS, ROTATION, nextMap, mapList } from '../shared/maps/index.js';
 import { playerOverlapsAny, raycastBoxes, pushOutOfSolids } from '../shared/collision.js';
-import { PLAYER_HEIGHT as H, PLAYER_RADIUS as R, MAX_PLAYERS } from '../shared/constants.js';
+import {
+  PLAYER_HEIGHT as H, PLAYER_RADIUS as R, MAX_PLAYERS, BR_MAX_PLAYERS,
+} from '../shared/constants.js';
 
 test('rotation contains all six competitive maps and cycles', () => {
   assert.deepEqual(ROTATION, ['warehouse', 'rooftops', 'alley', 'courtyard', 'foundry', 'switchyard']);
@@ -47,6 +49,15 @@ test('battle royale has distinct named areas with useful loot', () => {
       (point) => Math.hypot(point.pos[0] - area.pos[0], point.pos[2] - area.pos[1]) <= area.radius,
     );
     assert.ok(nearbyLoot.length >= 8, `${area.name} has only ${nearbyLoot.length} reachable loot points`);
+  }
+  assert.ok(map.spawns.ffa.length >= BR_MAX_PLAYERS, 'every BR player needs a distinct drop');
+  assert.ok(map.vehicleSpawns.length >= 10, 'the expanded island needs transport between districts');
+  for (const vehicle of map.vehicleSpawns) {
+    assert.equal(
+      playerOverlapsAny(vehicle.pos, H, R, map.solids),
+      false,
+      `vehicle ${vehicle.index} is inside geometry`,
+    );
   }
 });
 

@@ -409,6 +409,7 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
     // Back on their feet: undo anything the death pose changed.
     entity.group.rotation.x = 0;
     const parachuting = hasFlag(state.flags, FLAG.PARACHUTE);
+    const driving = hasFlag(state.flags, FLAG.VEHICLE);
     entity.parachute.visible = parachuting;
 
     // ---- pose ----
@@ -424,13 +425,13 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
     entity.lastPos[1] = state.pos[1];
     entity.lastPos[2] = state.pos[2];
 
-    const crouched = hasFlag(state.flags, FLAG.CROUCH);
+    const crouched = hasFlag(state.flags, FLAG.CROUCH) || driving;
 
     if (entity.character) {
       // The rig has a Duck clip, so squashing the whole figure — which is what the
       // box version has to do — would be crouching twice.
       entity.group.scale.y = 1;
-      showHeldWeapon(entity.character, emote || parachuting ? null : state.weapon);
+      showHeldWeapon(entity.character, emote || parachuting || driving ? null : state.weapon);
       if (emote) {
         playClip(entity.character, emote.clip, { loop: false });
       } else {
@@ -447,7 +448,7 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
       }
       advanceAnimation(entity, camera, dt);
     } else {
-      const scaleY = crouched ? PLAYER_CROUCH_HEIGHT / PLAYER_HEIGHT : 1;
+      const scaleY = driving ? 0.62 : crouched ? PLAYER_CROUCH_HEIGHT / PLAYER_HEIGHT : 1;
       entity.group.scale.y += (scaleY - entity.group.scale.y) * 0.3;
 
       // ---- leg swing, driven by how far they actually moved ----
@@ -456,7 +457,7 @@ export function syncRemotePlayers(rp, states, { myId, mode, myTeam, roster, came
       entity.legL.rotation.x = swing;
       entity.legR.rotation.x = -swing;
       applyFallbackEmote(entity, emote, now);
-      if (parachuting) entity.weapon.visible = false;
+      if (parachuting || driving) entity.weapon.visible = false;
     }
 
     // ---- weapon model roughly matches what they're holding ----

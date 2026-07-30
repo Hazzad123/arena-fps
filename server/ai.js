@@ -15,7 +15,7 @@
 // present. Anything that means "is anyone actually here" must use humanCount().
 
 import {
-  PLAYER_HEIGHT, PLAYER_RADIUS, WALK_SPEED, GRAVITY, MAX_FALL_SPEED,
+  PLAYER_HEIGHT, PLAYER_RADIUS, WALK_SPEED, SPRINT_SPEED, GRAVITY, MAX_FALL_SPEED,
   JUMP_VELOCITY, MAX_HEALTH, PARACHUTE_FALL_SPEED, PARACHUTE_GLIDE_SPEED,
 } from '../shared/constants.js';
 import { FLAG } from '../shared/protocol.js';
@@ -86,6 +86,7 @@ export function createAiPlayer({ name, primaryId, team, skill = 'normal' }) {
     joinedAt: Date.now(),
     rejectedMoves: 0,
     chatTimes: [],
+    vehicleId: null,
 
     ai: {
       skill,
@@ -223,7 +224,7 @@ function stepParachute(room, bot, dt, now) {
   const ai = bot.ai;
   if (!ai.landingTarget) {
     // Each bot already started over a different shoreline point. Land near that
-    // individual drop instead of all thirty evaluating the same epic loot and
+    // individual drop instead of the whole lobby evaluating the same epic loot and
     // converging into one mid-air swarm.
     const b = room.map.bounds;
     ai.landingTarget = [
@@ -275,8 +276,11 @@ export function stepAi(room, bot, dt, now) {
     return;
   }
 
+  const zoneUrgent = !!room.aiZoneUrgent?.(bot);
+
   // ---- target acquisition ----
-  const found = now >= (ai.combatReadyAt ?? 0) ? acquireTarget(room, bot) : null;
+  const found = !zoneUrgent && now >= (ai.combatReadyAt ?? 0) ? acquireTarget(room, bot) : null;
+  if (zoneUrgent) ai.targetId = null;
   if (found) {
     if (ai.targetId !== found.other.id) {
       ai.targetId = found.other.id;
@@ -311,9 +315,9 @@ export function stepAi(room, bot, dt, now) {
   }
 
   // ---- movement ----
-  if (!ai.waypoint || now > ai.repathAt) {
+  if (!ai.waypoint || now > ai.repathAt || zoneUrgent) {
     ai.waypoint = pickWaypoint(room, bot);
-    ai.repathAt = now + 6000 + Math.random() * 6000;
+    ai.repathAt = now + (zoneUrgent ? 1200 : 6000 + Math.random() * 6000);
   }
 
   // Close, retreat or orbit according to the equipped gun. Standing still at one
@@ -344,7 +348,7 @@ export function stepAi(room, bot, dt, now) {
     if (Math.hypot(wantX, wantZ) < 1.5) ai.waypoint = null;
   }
 
-  const speed = engaging ? WALK_SPEED * 0.85 : WALK_SPEED;
+  const speed = zoneUrgent ? SPRINT_SPEED : engaging ? WALK_SPEED * 0.85 : WALK_SPEED;
   const [moveX, moveZ] = steer(room, bot, wantX, wantZ);
   ai.vel[0] = moveX * speed;
   ai.vel[2] = moveZ * speed;
@@ -392,7 +396,9 @@ export function stepAi(room, bot, dt, now) {
     ai.stuckFor = 0;
   }
 
-  bot.flags = (ai.onGround ? 0 : FLAG.AIRBORNE) | (engaging ? FLAG.FIRING : 0);
+  bot.flags = (ai.onGround ? 0 : FLAG.AIRBORNE)
+    | (engaging ? FLAG.FIRING : 0)
+    | (zoneUrgent ? FLAG.SPRINT : 0);
   bot.lastStateAt = now;
 
   // ---- shooting ----

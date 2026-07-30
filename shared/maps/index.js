@@ -59,8 +59,9 @@ export function getMap(id) {
 
   // Loot spawn points, normalised like the pickups. Battle royale only.
   const lootPoints = (raw.lootPoints ?? []).map((pos, index) => ({ index, pos: [...pos] }));
+  const vehicleSpawns = (raw.vehicleSpawns ?? []).map((pos, index) => ({ index, pos: [...pos] }));
 
-  const map = { ...raw, solids, barrels, blastSolids, healthPacks, lootPoints };
+  const map = { ...raw, solids, barrels, blastSolids, healthPacks, lootPoints, vehicleSpawns };
   cache.set(id, map);
   return map;
 }

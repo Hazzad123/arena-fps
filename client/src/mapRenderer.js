@@ -74,7 +74,7 @@ function getTexture(name) {
  * does want to be specific.
  */
 function surfaceFor(solid, map) {
-  if (solid.tag?.startsWith('surface:')) return solid.tag.slice(8);
+  if (solid.tag?.startsWith('surface:')) return solid.tag.split(':')[1];
 
   const w = solid.max[0] - solid.min[0];
   const h = solid.max[1] - solid.min[1];
@@ -88,6 +88,13 @@ function surfaceFor(solid, map) {
   // Big and upright: a wall.
   if (h >= 2.5 && Math.max(w, d) >= 10 && Math.min(w, d) <= 3) return map.wallTexture ?? 'concrete';
   return null;
+}
+
+/** Render-only stacking for authored floor overlays; collision remains perfectly flat. */
+function surfaceLayer(solid) {
+  if (!solid.tag?.startsWith('surface:')) return 0;
+  const layer = Number(solid.tag.split(':')[2]);
+  return Number.isFinite(layer) ? Math.max(1, layer) : 1;
 }
 
 export function createWorld(renderer) {
@@ -255,13 +262,26 @@ function buildSurfaces(map, mesh) {
     // the desaturated concrete wants nearly all of it.
     const tint = new THREE.Color(0xffffff).lerp(new THREE.Color(solid.color), tex.tint);
 
-    const material = new THREE.MeshLambertMaterial({ color: tint });
+    const layer = surfaceLayer(solid);
+    const material = new THREE.MeshLambertMaterial({
+      color: tint,
+      // Roads, runways and fields are collision-flush with the island floor.
+      // Rendering coplanar faces without an offset makes the depth buffer switch
+      // between them every frame (z-fighting). Pull authored overlays forward in
+      // depth while leaving their shared collision geometry untouched.
+      polygonOffset: layer > 0,
+      polygonOffsetFactor: layer > 0 ? -layer : 0,
+      polygonOffsetUnits: layer > 0 ? -4 * layer : 0,
+    });
 
     const box = new THREE.Mesh(UNIT_CUBE, material);
     box.scale.set(w, h, d);
     box.position.set(
       (solid.min[0] + solid.max[0]) / 2,
-      (solid.min[1] + solid.max[1]) / 2,
+      // A few render-only millimetres separate overlays from the ground and
+      // from one another. This is too small to look raised, but unlike depth
+      // offset alone it remains stable on low-precision mobile GPUs.
+      (solid.min[1] + solid.max[1]) / 2 + layer * 0.006,
       (solid.min[2] + solid.max[2]) / 2,
     );
     box.castShadow = true;

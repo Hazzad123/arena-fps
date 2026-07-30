@@ -14,6 +14,7 @@ import {
   WAVE_BREAK_MS, WAVE_FIRST_DELAY_MS, WAVE_MAX_CONCURRENT,
   WAVE_BASE_ENEMIES, WAVE_ENEMIES_PER_WAVE,
   EMOTE_COOLDOWN_MS, BR_DROP_HEIGHT, BR_VICTORY_MS, BR_SCOREBOARD_MS,
+  VEHICLE_MAX_SPEED, VEHICLE_USE_RADIUS,
 } from '../shared/constants.js';
 import {
   S2C, PHASE, FLAG, MODES, EMOTES, encode, encodeSnapshot, sanitiseChat,
@@ -26,7 +27,7 @@ import {
 import * as modes from './modes.js';
 import { createAiPlayer, stepAi, aiName } from './ai.js';
 import {
-  createBrState, tickZone, zonePayload, lootList, takeLoot, aiZoneWaypoint,
+  createBrState, tickZone, zonePayload, lootList, takeLoot, aiZoneWaypoint, aiNeedsZone,
   aiConsiderLoot, aliveCount, soleSurvivor,
 } from './br.js';
 import {
@@ -87,6 +88,7 @@ export class Room {
     // Survival state. Null in every other mode.
     this.wave = null;
     this.br = null;
+    this.vehicles = [];
     this.botTarget = 0;
 
     this.timer = setInterval(() => this.tick(), TICK_MS);
@@ -124,7 +126,7 @@ export class Room {
     return [...this.players.values()].filter((p) => !p.isBot);
   }
 
-  /** Slots in this room. Battle royale runs a thirty-player lobby. */
+  /** Slots in this room. Battle royale runs a forty-five-player lobby. */
   capacity() {
     return modes.capacityFor(this.mode);
   }
@@ -168,6 +170,7 @@ export class Room {
       rejectedMoves: 0,
       chatTimes: [],
       lastEmoteAt: 0,
+      vehicleId: null,
     };
 
     this.players.set(id, player);
@@ -195,6 +198,7 @@ export class Room {
       pickupsTaken: this.takenPickups(),
       loot: this.br ? lootList(this.br) : null,
       zone: this.br ? zonePayload(this.br) : null,
+      vehicles: this.vehicles.length ? this.vehiclePayload() : null,
     });
 
     this.broadcastRoster();
@@ -212,6 +216,7 @@ export class Room {
   removePlayer(id) {
     const player = this.players.get(id);
     if (!player) return;
+    this.releaseVehicle(player);
     this.players.delete(id);
     // Someone who has left shouldn't still be holding the room in the lobby.
     this.regroupRequests.delete(id);
@@ -393,7 +398,7 @@ export class Room {
 
     // AI cannot click Ready and should never hold humans in the lobby. This
     // matters most after a Battle Royale, where the previous round can leave
-    // twenty-nine fill bots in the roster while the human regroups.
+    // fill bots in the roster while the human regroups.
     const players = this.humans();
     const readyCount = players.filter((p) => p.ready).length;
 
@@ -525,6 +530,7 @@ export class Room {
     // should survive a round it wasn't started for.
     this.wave = null;
     this.br = null;
+    this.vehicles = [];
 
     this.resetBarrels();
     this.resetPickups();
@@ -587,7 +593,7 @@ export class Room {
   // ------------------------------------------------------------ battle royale
 
   startBattleRoyale() {
-    // Fill every empty slot with an AI. A thirty-player match with four people in
+    // Fill every empty slot with AI. A forty-five-player match with four people in
     // it is the whole point of having bots.
     const missing = this.capacity() - this.players.size;
     for (let i = 0; i < missing; i++) this.addAiPlayer({ team: null });
@@ -601,8 +607,10 @@ export class Room {
     }
 
     this.br = createBrState(this.map);
+    this.resetVehicles();
     this.broadcast(S2C.LOOT, { all: lootList(this.br) });
     this.broadcast(S2C.ZONE, zonePayload(this.br));
+    this.broadcast(S2C.VEHICLES, { all: this.vehiclePayload() });
     this.broadcastAlive();
     this.systemChat(`${this.players.size} players. Last one standing.`);
   }
@@ -614,6 +622,58 @@ export class Room {
   handleTakeLoot(player) {
     if (!this.br || this.phase !== PHASE.LIVE) return;
     takeLoot(this, this.br, player);
+  }
+
+  resetVehicles() {
+    this.vehicles = (this.map.vehicleSpawns ?? []).map((spawn) => ({
+      index: spawn.index,
+      pos: [...spawn.pos],
+      yaw: 0,
+      driverId: null,
+    }));
+    for (const player of this.players.values()) player.vehicleId = null;
+  }
+
+  vehiclePayload(vehicle = null) {
+    const encodeVehicle = (v) => ({
+      i: v.index,
+      p: v.pos.map((n) => Math.round(n * 100) / 100),
+      y: Math.round(v.yaw * 1000) / 1000,
+      d: v.driverId,
+    });
+    return vehicle ? [encodeVehicle(vehicle)] : this.vehicles.map(encodeVehicle);
+  }
+
+  releaseVehicle(player) {
+    if (player?.vehicleId === null || player?.vehicleId === undefined) return;
+    const vehicle = this.vehicles.find((v) => v.index === player.vehicleId);
+    player.vehicleId = null;
+    if (!vehicle || vehicle.driverId !== player.id) return;
+    vehicle.driverId = null;
+    this.broadcast(S2C.VEHICLES, { upsert: this.vehiclePayload(vehicle) });
+  }
+
+  handleVehicle(player, msg) {
+    if (!this.br || this.phase !== PHASE.LIVE || !player.alive || player.parachuting) return;
+    if (player.vehicleId !== null && player.vehicleId !== undefined) {
+      this.releaseVehicle(player);
+      return;
+    }
+    const index = Number(msg?.i);
+    if (!Number.isInteger(index)) return;
+    const vehicle = this.vehicles.find((v) => v.index === index);
+    if (!vehicle || vehicle.driverId) return;
+    const distance = Math.hypot(
+      player.pos[0] - vehicle.pos[0],
+      player.pos[1] - vehicle.pos[1],
+      player.pos[2] - vehicle.pos[2],
+    );
+    if (distance > VEHICLE_USE_RADIUS) return;
+    vehicle.driverId = player.id;
+    player.vehicleId = vehicle.index;
+    vehicle.pos = [...player.pos];
+    vehicle.yaw = player.yaw;
+    this.broadcast(S2C.VEHICLES, { upsert: this.vehiclePayload(vehicle) });
   }
 
   tickBattleRoyale(now) {
@@ -800,8 +860,13 @@ export class Room {
     return null;
   }
 
+  aiZoneUrgent(bot) {
+    return this.br ? aiNeedsZone(this.br, bot) : false;
+  }
+
   /** Whether an AI is allowed to shoot at someone. Modes override the details. */
   aiCanTarget(bot, other) {
+    if (this.br && (Date.now() < this.br.combatStartsAt || aiNeedsZone(this.br, bot))) return false;
     return modes.canDamage(this, bot, other);
   }
 
@@ -1118,6 +1183,7 @@ export class Room {
     // spawn" true. A class chosen while alive only changes primaryId; this is the
     // single place that turns a class into weapons, for the lobby, a respawn and
     // a gun-game promotion alike.
+    this.releaseVehicle(player);
     player.inventory = modes.loadoutFor(this, player);
     player.weapon = player.inventory[0];
 
@@ -1185,7 +1251,15 @@ export class Room {
     const dt = (now - player.lastStateAt) / 1000;
     player.lastStateAt = now;
 
-    const result = validateMove(player, { pos: msg.p, yaw: msg.y, pitch: msg.t }, this.map, dt);
+    const driving = player.vehicleId !== null && player.vehicleId !== undefined;
+    const maxSpeed = driving ? VEHICLE_MAX_SPEED * 1.5 : undefined;
+    const result = validateMove(
+      player,
+      { pos: msg.p, yaw: msg.y, pitch: msg.t },
+      this.map,
+      dt,
+      maxSpeed,
+    );
     if (!result.ok) {
       player.rejectedMoves++;
       // Leave the last known good position in place; a brief stall reads far
@@ -1210,6 +1284,22 @@ export class Room {
       player.spawnProtectedUntil = now + 2000;
     }
     player.crouching = (player.flags & FLAG.CROUCH) !== 0;
+    if (driving) {
+      const vehicle = this.vehicles.find(
+        (candidate) => candidate.index === player.vehicleId && candidate.driverId === player.id,
+      );
+      if (vehicle) {
+        vehicle.pos = [...player.pos];
+        vehicle.yaw = player.yaw;
+        player.flags |= FLAG.VEHICLE;
+        this.broadcast(S2C.VEHICLES, { upsert: this.vehiclePayload(vehicle) });
+      } else {
+        player.vehicleId = null;
+        player.flags &= ~FLAG.VEHICLE;
+      }
+    } else {
+      player.flags &= ~FLAG.VEHICLE;
+    }
 
     // Fall damage and the void are reported by the client but applied here.
     if (typeof msg.fd === 'number' && msg.fd > 0 && player.alive) {
@@ -1252,7 +1342,8 @@ export class Room {
   }
 
   handleShoot(player, msg) {
-    if (this.phase !== PHASE.LIVE || !player.alive || player.parachuting) return;
+    if (this.phase !== PHASE.LIVE || !player.alive || player.parachuting || player.vehicleId != null) return;
+    if (this.br && Date.now() < this.br.combatStartsAt) return;
 
     const weaponId = msg.w;
     if (!player.inventory.includes(weaponId)) return;
@@ -1346,6 +1437,7 @@ export class Room {
   }
 
   killPlayer(victim, attacker, weaponId, headshot = false) {
+    this.releaseVehicle(victim);
     victim.alive = false;
     victim.health = 0;
     // No respawns in survival or battle royale: being killed is the end of your
@@ -1383,8 +1475,8 @@ export class Room {
     this.broadcastRoster();
 
     // The alive counter is the whole HUD in battle royale, and it only ever
-    // changes here. Without this it sat at "30 alive" for an entire match while
-    // twenty-nine people died in front of you.
+    // changes here. Without this it can sit at the starting count for an entire
+    // match while everyone dies in front of you.
     if (modes.isBattleRoyale(this.mode)) this.broadcastAlive();
 
     const win = modes.checkWin(this);

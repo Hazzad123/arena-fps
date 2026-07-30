@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 
 import { Room } from '../server/room.js';
 import { stepAi } from '../server/ai.js';
+import { aiNeedsZone, zonePaceForAlive } from '../server/br.js';
 import { PHASE, S2C } from '../shared/protocol.js';
 import {
   MAX_HEALTH, PLAYER_HEIGHT, PLAYER_RADIUS, HEALTH_PACK_RESPAWN_MS, BR_VICTORY_MS,
@@ -406,11 +407,11 @@ function brRoom() {
   return { room, human };
 }
 
-test('battle royale plays the island and fills the lobby to thirty', () => {
+test('battle royale plays the island and fills the lobby to forty-five', () => {
   const { room } = brRoom();
   assert.equal(room.mapId, 'island', 'battle royale has exactly one map');
-  assert.equal(room.capacity(), 30);
-  assert.equal(room.players.size, 30, 'every empty slot should be an AI');
+  assert.equal(room.capacity(), 45);
+  assert.equal(room.players.size, 45, 'every empty slot should be an AI');
   assert.equal(room.humanCount(), 1);
   assert.equal(room.minPlayers(), 1, 'bots fill the rest, so one person is a match');
   room.dispose();
@@ -463,22 +464,22 @@ test('nobody respawns in battle royale', () => {
 test('the alive counter drops as people are eliminated', () => {
   // The alive count is the whole scoreboard in battle royale, and it is only ever
   // recomputed on a kill. The first version never broadcast it there, so the HUD
-  // read "30 alive" for a full match while twenty-nine people died in front of you.
+  // read the starting count for a full match while everyone died in front of you.
   const { room, human } = brRoom();
   const sent = [];
   human.ws = { readyState: 1, send: (raw) => sent.push(JSON.parse(raw)) };
 
   const bots = [...room.players.values()].filter((p) => p !== human);
-  assert.equal(bots.length, 29);
+  assert.equal(bots.length, 44);
 
   room.applyDamage(bots[0], human, 999, 'sniper');
   const alive = sent.filter((m) => m.m === S2C.ALIVE);
   assert.equal(alive.length, 1, 'a kill has to refresh the counter');
-  assert.equal(alive[0].alive, 29, 'one down, twenty-nine standing');
-  assert.equal(alive[0].total, 30);
+  assert.equal(alive[0].alive, 44, 'one down, forty-four standing');
+  assert.equal(alive[0].total, 45);
 
   room.applyDamage(bots[1], human, 999, 'sniper');
-  assert.equal(sent.filter((m) => m.m === S2C.ALIVE).at(-1).alive, 28);
+  assert.equal(sent.filter((m) => m.m === S2C.ALIVE).at(-1).alive, 43);
 
   room.dispose();
   restoreClock();
@@ -489,7 +490,7 @@ test('being killed in battle royale tells you where you finished', () => {
   const sent = [];
   human.ws = { readyState: 1, send: (raw) => sent.push(JSON.parse(raw)) };
 
-  // Two bots go first, so the human should come 28th of 30.
+  // Two bots go first, so the human should come 43rd of 45.
   const bots = [...room.players.values()].filter((p) => p !== human);
   room.applyDamage(bots[0], human, 999, 'sniper');
   room.applyDamage(bots[1], human, 999, 'sniper');
@@ -497,7 +498,7 @@ test('being killed in battle royale tells you where you finished', () => {
 
   const myDeath = sent.filter((m) => m.m === S2C.KILL).find((m) => m.victim === human.id);
   assert.ok(myDeath, 'the victim hears about their own death');
-  assert.equal(myDeath.placed, 28, 'placement is the only score battle royale has');
+  assert.equal(myDeath.placed, 43, 'placement is the only score battle royale has');
   room.dispose();
   restoreClock();
 });
@@ -532,6 +533,66 @@ test('the zone closes and hurts whoever is outside it', () => {
   assert.ok(room.br.zone.phase >= 0, 'it should have entered a phase');
   assert.ok(human.health < MAX_HEALTH || !human.alive,
     'standing outside the zone has to cost something');
+  room.dispose();
+  restoreClock();
+});
+
+test('late-game population accelerates the zone', () => {
+  assert.equal(zonePaceForAlive(45), 1);
+  assert.ok(zonePaceForAlive(20) > zonePaceForAlive(30));
+  assert.ok(zonePaceForAlive(12) > 2);
+  assert.ok(zonePaceForAlive(6) > zonePaceForAlive(12));
+});
+
+test('bots treat the storm edge as urgent instead of wandering back to the coast', () => {
+  const { room } = brRoom();
+  const bot = [...room.players.values()].find((p) => p.isBot);
+  room.br.zone.centre = [0, 0];
+  room.br.zone.targetCentre = [0, 0];
+  room.br.zone.radius = 100;
+  room.br.zone.targetRadius = 70;
+  room.br.zone.state = 'shrink';
+  bot.pos = [95, 0, 0];
+  assert.equal(aiNeedsZone(room.br, bot), true);
+  const waypoint = room.aiWaypointHint(bot);
+  assert.ok(Math.hypot(waypoint[0], waypoint[2]) < 40, 'urgent waypoint must be deep in safety');
+  room.dispose();
+  restoreClock();
+});
+
+test('opening combat grace blocks shots until players have landed and looted', () => {
+  const { room, human } = brRoom();
+  human.parachuting = false;
+  human.flags = 0;
+  room.handleShoot(human, { w: 'pistol', h: [], o: human.pos, d: [0, 0, -1] });
+  assert.equal(human.lastShotAt, 0, 'opening shot should be ignored');
+
+  fakeClock = room.br.combatStartsAt + 1;
+  room.handleShoot(human, { w: 'pistol', h: [], o: human.pos, d: [0, 0, -1] });
+  assert.equal(human.lastShotAt, fakeClock, 'weapon should unlock after the grace period');
+  room.dispose();
+  restoreClock();
+});
+
+test('rovers have exclusive drivers and are released on death', () => {
+  const { room, human } = brRoom();
+  const rover = room.vehicles[0];
+  assert.ok(rover, 'battle royale should spawn road vehicles');
+  human.parachuting = false;
+  human.pos = [...rover.pos];
+  room.handleVehicle(human, { i: rover.index });
+  assert.equal(human.vehicleId, rover.index);
+  assert.equal(rover.driverId, human.id);
+
+  const other = [...room.players.values()].find((p) => p !== human);
+  other.parachuting = false;
+  other.pos = [...rover.pos];
+  room.handleVehicle(other, { i: rover.index });
+  assert.equal(rover.driverId, human.id, 'an occupied rover cannot be stolen');
+
+  room.applyDamage(human, other, 999, 'rifle');
+  assert.equal(human.vehicleId, null);
+  assert.equal(rover.driverId, null, 'death must leave the rover usable');
   room.dispose();
   restoreClock();
 });

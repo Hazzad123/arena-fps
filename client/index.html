@@ -24,6 +24,18 @@
         <canvas id="minimap-canvas" width="360" height="360"></canvas>
         <div id="minimap-area" class="hidden"></div>
       </div>
+      <div id="full-map" class="hidden" aria-label="Tactical map">
+        <div class="full-map-head">
+          <div><span>TACTICAL DISPLAY</span><b id="full-map-title">AREA MAP</b></div>
+          <kbd>M</kbd>
+        </div>
+        <canvas id="full-map-canvas" width="900" height="900"></canvas>
+        <div class="full-map-legend">
+          <span class="you">You</span><span class="safe">Safe zone</span>
+          <span class="next">Next zone</span><span class="vehicle">Rover</span>
+          <span class="contact">Known contact</span>
+        </div>
+      </div>
 
       <!-- Chat. The log is always present but fades when idle; the input only
            appears while you're actually typing. -->
@@ -82,7 +94,7 @@
       <div id="weapon-rack" class="hidden"></div>
 
       <!-- battle royale: alive counter, zone warning, and the loot prompt -->
-      <div id="br-alive" class="hidden"><b id="br-alive-n">30</b><span>alive</span></div>
+      <div id="br-alive" class="hidden"><b id="br-alive-n">45</b><span>alive</span></div>
       <div id="br-zone" class="hidden"></div>
       <div id="br-prompt" class="hidden"></div>
 
@@ -123,8 +135,9 @@
     <!-- ================= menu ================= -->
     <div id="menu">
       <div id="menu-inner">
+        <div class="system-kicker"><span>CROWN NETWORK</span><b>ONLINE</b></div>
         <h1>ARENA</h1>
-        <p class="tagline">Drop in, gear up, and outlast 29 rivals. No accounts or downloads.</p>
+        <p class="tagline">TACTICAL COMBAT SYSTEM // Drop in, gear up, and outlast 44 rivals.</p>
 
         <label class="field">
           <span>Your name</span>
@@ -145,7 +158,7 @@
 
         <div class="create-row">
           <select id="mode-select">
-            <option value="br">Battle Royale (30)</option>
+            <option value="br">Battle Royale (45)</option>
             <option value="tdm">Team Deathmatch</option>
             <option value="ffa">Free-for-all</option>
             <option value="gungame">Gun Game</option>
@@ -182,6 +195,7 @@
     <!-- ================= lobby ================= -->
     <div id="lobby" class="hidden">
       <div id="lobby-inner">
+        <div class="system-kicker"><span>MATCH CONTROL</span><b>LINKED</b></div>
         <div class="lobby-head">
           <div>
             <div class="label">Room code</div>
@@ -202,7 +216,7 @@
           <div class="label">Host controls</div>
           <div class="host-row">
             <select id="lobby-mode-select">
-              <option value="br">Battle Royale (30)</option>
+              <option value="br">Battle Royale (45)</option>
               <option value="tdm">Team Deathmatch</option>
               <option value="ffa">Free-for-all</option>
               <option value="gungame">Gun Game</option>
@@ -232,6 +246,7 @@
          range. Escape releases the pointer, so this is what Escape now does. -->
     <div id="pause" class="hidden">
       <div id="pause-inner">
+        <div class="system-kicker"><span>TACTICAL SYSTEM</span><b>STANDBY</b></div>
         <div class="pause-head">
           <h2>PAUSED</h2>
           <div id="pause-note" class="label"></div>
@@ -249,6 +264,7 @@
             <span>Reload / use</span><kbd>R / E</kbd>
             <span>Switch weapon</span><kbd>1–8</kbd>
             <span>Scoreboard / chat</span><kbd>Tab / Enter</kbd>
+            <span>Full tactical map</span><kbd>M</kbd>
             <span>Wave / yes / no</span><kbd>Z / X / V</kbd>
             <span>Pause</span><kbd>Esc</kbd>
           </div>
