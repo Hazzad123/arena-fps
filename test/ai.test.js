@@ -408,11 +408,11 @@ function brRoom() {
   return { room, human };
 }
 
-test('battle royale plays the island and fills the lobby to forty-five', () => {
+test('battle royale plays the island and fills the lobby to thirty', () => {
   const { room } = brRoom();
   assert.equal(room.mapId, 'island', 'battle royale has exactly one map');
-  assert.equal(room.capacity(), 45);
-  assert.equal(room.players.size, 45, 'every empty slot should be an AI');
+  assert.equal(room.capacity(), 30);
+  assert.equal(room.players.size, 30, 'every empty slot should be an AI');
   assert.equal(room.humanCount(), 1);
   assert.equal(room.minPlayers(), 1, 'bots fill the rest, so one person is a match');
   room.dispose();
@@ -471,16 +471,16 @@ test('the alive counter drops as people are eliminated', () => {
   human.ws = { readyState: 1, send: (raw) => sent.push(JSON.parse(raw)) };
 
   const bots = [...room.players.values()].filter((p) => p !== human);
-  assert.equal(bots.length, 44);
+  assert.equal(bots.length, 29);
 
   room.applyDamage(bots[0], human, 999, 'sniper');
   const alive = sent.filter((m) => m.m === S2C.ALIVE);
   assert.equal(alive.length, 1, 'a kill has to refresh the counter');
-  assert.equal(alive[0].alive, 44, 'one down, forty-four standing');
-  assert.equal(alive[0].total, 45);
+  assert.equal(alive[0].alive, 29, 'one down, twenty-nine standing');
+  assert.equal(alive[0].total, 30);
 
   room.applyDamage(bots[1], human, 999, 'sniper');
-  assert.equal(sent.filter((m) => m.m === S2C.ALIVE).at(-1).alive, 43);
+  assert.equal(sent.filter((m) => m.m === S2C.ALIVE).at(-1).alive, 28);
 
   room.dispose();
   restoreClock();
@@ -491,7 +491,7 @@ test('being killed in battle royale tells you where you finished', () => {
   const sent = [];
   human.ws = { readyState: 1, send: (raw) => sent.push(JSON.parse(raw)) };
 
-  // Two bots go first, so the human should come 43rd of 45.
+  // Two bots go first, so the human should come 28th of 30.
   const bots = [...room.players.values()].filter((p) => p !== human);
   room.applyDamage(bots[0], human, 999, 'sniper');
   room.applyDamage(bots[1], human, 999, 'sniper');
@@ -499,7 +499,7 @@ test('being killed in battle royale tells you where you finished', () => {
 
   const myDeath = sent.filter((m) => m.m === S2C.KILL).find((m) => m.victim === human.id);
   assert.ok(myDeath, 'the victim hears about their own death');
-  assert.equal(myDeath.placed, 43, 'placement is the only score battle royale has');
+  assert.equal(myDeath.placed, 28, 'placement is the only score battle royale has');
   room.dispose();
   restoreClock();
 });
@@ -539,7 +539,7 @@ test('the zone closes and hurts whoever is outside it', () => {
 });
 
 test('late-game population accelerates the zone', () => {
-  assert.equal(zonePaceForAlive(45), 1);
+  assert.equal(zonePaceForAlive(30), 1);
   assert.ok(zonePaceForAlive(20) > zonePaceForAlive(30));
   assert.ok(zonePaceForAlive(12) > 2);
   assert.ok(zonePaceForAlive(6) > zonePaceForAlive(12));

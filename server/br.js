@@ -135,16 +135,16 @@ export function zonePayload(br, now = Date.now()) {
 export function zonePaceForAlive(alive) {
   if (alive <= 6) return 3.1;
   if (alive <= 12) return 2.35;
-  if (alive <= 20) return 1.7;
-  if (alive <= 30) return 1.3;
+  if (alive <= 18) return 1.7;
+  if (alive <= 24) return 1.3;
   return 1;
 }
 
 function targetPhaseForAlive(alive) {
   if (alive <= 6) return 4;
   if (alive <= 12) return 3;
-  if (alive <= 20) return 2;
-  if (alive <= 30) return 1;
+  if (alive <= 18) return 2;
+  if (alive <= 24) return 1;
   return 0;
 }
 

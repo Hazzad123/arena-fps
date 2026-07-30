@@ -129,7 +129,7 @@ export class Room {
     return [...this.players.values()].filter((p) => !p.isBot);
   }
 
-  /** Slots in this room. Battle royale runs a forty-five-player lobby. */
+  /** Slots in this room. Battle royale runs a thirty-player lobby. */
   capacity() {
     return modes.capacityFor(this.mode);
   }
@@ -596,7 +596,7 @@ export class Room {
   // ------------------------------------------------------------ battle royale
 
   startBattleRoyale() {
-    // Fill every empty slot with AI. A forty-five-player match with four people in
+    // Fill every empty slot with AI. A thirty-player match with four people in
     // it is the whole point of having bots.
     const missing = this.capacity() - this.players.size;
     for (let i = 0; i < missing; i++) this.addAiPlayer({ team: null });

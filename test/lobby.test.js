@@ -359,7 +359,7 @@ test('a populated battle royale room cannot switch into a smaller mode', (t) => 
 
   room.handleLobbySet(players[0], { mode: 'tdm' });
   assert.equal(room.mode, 'br');
-  assert.equal(room.capacity(), 45);
+  assert.equal(room.capacity(), 30);
 });
 
 test('a non-host cannot change the mode or the map', (t) => {

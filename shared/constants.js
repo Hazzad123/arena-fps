@@ -138,8 +138,8 @@ export const SCOREBOARD_MS = 15_000;
 export const MIN_PLAYERS_TO_START = 2;
 export const MAX_PLAYERS = 8;
 // Battle royale runs a much bigger lobby on a much bigger map. Any unfilled slot
-// becomes an AI, so a room of two still plays a forty-five-player match.
-export const BR_MAX_PLAYERS = 45;
+// becomes an AI, so a room of two still plays a thirty-player match.
+export const BR_MAX_PLAYERS = 30;
 export const EMPTY_ROOM_TTL_MS = 60_000;
 
 // How long a lobby that already has enough players waits for the stragglers to

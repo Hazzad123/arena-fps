@@ -2,7 +2,7 @@
 
 A browser multiplayer arena FPS for playing with coworkers. No accounts, no
 downloads, no install — share a link, pick a name, go. Three-minute rounds,
-six arena maps, up to eight players per arena room (45 in Battle Royale), plus
+six arena maps, up to eight players per arena room (30 in Battle Royale), plus
 a single-player practice range.
 
 **Desktop only.** It needs a mouse and a keyboard (pointer lock and mouse aim),
@@ -52,7 +52,7 @@ To let people on your network join without deploying, give them
 **Modes.** Team Deathmatch (auto-balanced teams, friendly fire off),
 Free-for-all, Gun Game (every kill promotes you up
 pistol → SMG → shotgun → rifle → sniper → knife; win with a knife kill),
-co-op Survival waves, and a 45-player Battle Royale with parachute drops, ground
+co-op Survival waves, and a 30-player Battle Royale with parachute drops, ground
 loot, destructible rovers, named districts, a full skybox, an adaptive closing
 zone and spectators.
 

@@ -145,7 +145,7 @@ const MUZZLE = {
 // A proper lower-right shoulder pose: the stock stays near the player while the
 // barrel angles inward toward the crosshair. Long guns used to be pushed so far
 // down -Z that only a thin, end-on silhouette was visible.
-const HIP = new THREE.Vector3(0.21, -0.24, -1.0);
+const HIP = new THREE.Vector3(0.1, -0.24, -1.0);
 // Aimed: centred horizontally but sitting LOW, so the receiver occupies the
 // bottom of the frame and the crosshair looks over the top of it. Putting the
 // gun's centreline on the crosshair (which is what "align the sights" naively
@@ -176,21 +176,20 @@ const WEAPON_VIEW_SCALE = {
   lmg: 1.01,
   knife: 1.1,
 };
-// Positive yaw turns a gun held on the right inward, putting its muzzle near the
-// crosshair and its receiver at the lower-right. The old negative values turned
-// the muzzle farther right and made the whole weapon look as if it were falling
-// out of the player's hands.
-const BASE_YAW = 0.24;
+// Point almost straight into the scene. The slight inward angle only brings the
+// muzzle onto the crosshair; it is deliberately far below the old broad
+// three-quarter pose that showed the gun side-on across the screen.
+const BASE_YAW = 0.08;
 const WEAPON_POSE_YAW = {
-  pistol: 0.2,
-  revolver: 0.2,
-  machinepistol: 0.22,
-  shotgun: 0.22,
-  autoshotgun: 0.22,
-  dmr: 0.23,
-  sniper: 0.22,
-  antimateriel: 0.21,
-  lmg: 0.22,
+  pistol: 0.07,
+  revolver: 0.07,
+  machinepistol: 0.08,
+  shotgun: 0.075,
+  autoshotgun: 0.075,
+  dmr: 0.075,
+  sniper: 0.07,
+  antimateriel: 0.065,
+  lmg: 0.075,
 };
 // Every source pack uses a different unit scale. First-person guns are fitted to
 // a real silhouette length, uniformly, so a scope stays round and a stock does
@@ -251,15 +250,15 @@ export function createWeaponView() {
   scene.add(camera);
 
   // Fixed studio lighting so the gun reads clearly on every map.
-  scene.add(new THREE.HemisphereLight(0xecf5f2, 0x292b31, 0.9));
+  scene.add(new THREE.HemisphereLight(0xecf5f2, 0x292b31, 0.6));
   // Flat dark MTL colours need a little frontal fill. Without it, faces turned
   // away from the key light collapse to black even though their material colour
   // loaded correctly.
-  scene.add(new THREE.AmbientLight(0xffffff, 0.35));
-  const key = new THREE.DirectionalLight(0xffefd0, 1.3);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.2));
+  const key = new THREE.DirectionalLight(0xffefd0, 1.05);
   key.position.set(-0.6, 1, 0.75);
   scene.add(key);
-  const rim = new THREE.DirectionalLight(0xaed8ff, 0.45);
+  const rim = new THREE.DirectionalLight(0xaed8ff, 0.28);
   rim.position.set(1, -0.3, -0.6);
   scene.add(rim);
 
