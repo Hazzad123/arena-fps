@@ -13,6 +13,7 @@ import { aiNeedsZone, zonePaceForAlive } from '../server/br.js';
 import { PHASE, S2C } from '../shared/protocol.js';
 import {
   MAX_HEALTH, PLAYER_HEIGHT, PLAYER_RADIUS, HEALTH_PACK_RESPAWN_MS, BR_VICTORY_MS,
+  VEHICLE_DESTRUCTION_DAMAGE,
 } from '../shared/constants.js';
 import { playerOverlapsAny, raycastBoxes } from '../shared/collision.js';
 import { getMap, MAP_IDS } from '../shared/maps/index.js';
@@ -593,6 +594,53 @@ test('rovers have exclusive drivers and are released on death', () => {
   room.applyDamage(human, other, 999, 'rifle');
   assert.equal(human.vehicleId, null);
   assert.equal(rover.driverId, null, 'death must leave the rover usable');
+  room.dispose();
+  restoreClock();
+});
+
+test('gunfire destroys a rover and ejects its driver', () => {
+  const { room, human } = brRoom();
+  const rover = room.vehicles[0];
+  const driver = [...room.players.values()].find((p) => p !== human);
+
+  human.parachuting = false;
+  human.flags = 0;
+  human.inventory = ['rifle', 'pistol', 'knife'];
+  human.weapon = 'rifle';
+  human.pos = [rover.pos[0], rover.pos[1], rover.pos[2] + 8];
+
+  driver.parachuting = false;
+  driver.pos = [...rover.pos];
+  driver.vehicleId = rover.index;
+  rover.driverId = driver.id;
+
+  const origin = [human.pos[0], human.pos[1] + PLAYER_HEIGHT - 0.18, human.pos[2]];
+  const target = [rover.pos[0], rover.pos[1] + 0.75, rover.pos[2]];
+  const delta = target.map((value, i) => value - origin[i]);
+  const length = Math.hypot(...delta);
+  const direction = delta.map((value) => value / length);
+
+  fakeClock = room.br.combatStartsAt + 1;
+  for (let shot = 0; shot < 20 && !rover.destroyed; shot++) {
+    fakeClock += 100;
+    room.handleShoot(human, {
+      w: 'rifle',
+      h: [],
+      o: origin,
+      d: direction,
+      v: [{ i: rover.index, d: direction }],
+    });
+  }
+
+  assert.equal(rover.destroyed, true, 'sustained rifle fire should wreck the rover');
+  assert.equal(rover.health, 0);
+  assert.equal(rover.driverId, null);
+  assert.equal(driver.vehicleId, null, 'the occupant must be ejected from a wreck');
+  assert.equal(
+    driver.health,
+    MAX_HEALTH - VEHICLE_DESTRUCTION_DAMAGE,
+    'destruction should hurt, not silently free, the driver',
+  );
   room.dispose();
   restoreClock();
 });

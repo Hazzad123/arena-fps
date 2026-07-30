@@ -14,16 +14,19 @@ import {
   WAVE_BREAK_MS, WAVE_FIRST_DELAY_MS, WAVE_MAX_CONCURRENT,
   WAVE_BASE_ENEMIES, WAVE_ENEMIES_PER_WAVE,
   EMOTE_COOLDOWN_MS, BR_DROP_HEIGHT, BR_VICTORY_MS, BR_SCOREBOARD_MS,
-  VEHICLE_MAX_SPEED, VEHICLE_USE_RADIUS,
+  VEHICLE_MAX_SPEED, VEHICLE_USE_RADIUS, VEHICLE_HEALTH, VEHICLE_DESTRUCTION_DAMAGE,
 } from '../shared/constants.js';
 import {
   S2C, PHASE, FLAG, MODES, EMOTES, encode, encodeSnapshot, sanitiseChat,
 } from '../shared/protocol.js';
 import { getMap, nextMap, ROTATION } from '../shared/maps/index.js';
-import { PRIMARY_IDS, getPrimary } from '../shared/weapons.js';
+import {
+  PRIMARY_IDS, getPrimary, getWeapon, damageAtDistance,
+} from '../shared/weapons.js';
 import {
   pushOutOfSolids, playerOverlapsAny, hasLineOfSight, raycastBoxes,
 } from '../shared/collision.js';
+import { raycastVehicle } from '../shared/vehicles.js';
 import * as modes from './modes.js';
 import { createAiPlayer, stepAi, aiName } from './ai.js';
 import {
@@ -630,6 +633,8 @@ export class Room {
       pos: [...spawn.pos],
       yaw: 0,
       driverId: null,
+      health: VEHICLE_HEALTH,
+      destroyed: false,
     }));
     for (const player of this.players.values()) player.vehicleId = null;
   }
@@ -640,6 +645,8 @@ export class Room {
       p: v.pos.map((n) => Math.round(n * 100) / 100),
       y: Math.round(v.yaw * 1000) / 1000,
       d: v.driverId,
+      h: Math.max(0, Math.round(v.health)),
+      x: v.destroyed ? 1 : 0,
     });
     return vehicle ? [encodeVehicle(vehicle)] : this.vehicles.map(encodeVehicle);
   }
@@ -662,7 +669,7 @@ export class Room {
     const index = Number(msg?.i);
     if (!Number.isInteger(index)) return;
     const vehicle = this.vehicles.find((v) => v.index === index);
-    if (!vehicle || vehicle.driverId) return;
+    if (!vehicle || vehicle.driverId || vehicle.destroyed) return;
     const distance = Math.hypot(
       player.pos[0] - vehicle.pos[0],
       player.pos[1] - vehicle.pos[1],
@@ -674,6 +681,51 @@ export class Room {
     vehicle.pos = [...player.pos];
     vehicle.yaw = player.yaw;
     this.broadcast(S2C.VEHICLES, { upsert: this.vehiclePayload(vehicle) });
+  }
+
+  /** Nearest intact rover hit by a ray, using the same OBB as the client. */
+  raycastVehicle(origin, direction, maxDistance) {
+    let best = null;
+    for (const vehicle of this.vehicles) {
+      if (vehicle.destroyed) continue;
+      const t = raycastVehicle(origin, direction, vehicle.pos, vehicle.yaw, maxDistance);
+      if (t === null || (best && t >= best.t)) continue;
+      best = { vehicle, t };
+    }
+    return best;
+  }
+
+  damageVehicle(vehicle, shooter, amount) {
+    if (!vehicle || vehicle.destroyed || !Number.isFinite(amount) || amount <= 0) return;
+    const dealt = Math.min(vehicle.health, Math.max(1, Math.round(amount)));
+    vehicle.health -= dealt;
+    const destroyed = vehicle.health <= 0;
+    const at = [vehicle.pos[0], vehicle.pos[1] + 0.75, vehicle.pos[2]];
+
+    if (destroyed) {
+      vehicle.health = 0;
+      vehicle.destroyed = true;
+      const driver = vehicle.driverId ? this.players.get(vehicle.driverId) : null;
+      vehicle.driverId = null;
+      if (driver) {
+        driver.vehicleId = null;
+        driver.flags &= ~FLAG.VEHICLE;
+        if (driver.alive) {
+          this.applyDamage(driver, shooter, VEHICLE_DESTRUCTION_DAMAGE, 'vehicle');
+        }
+      }
+    }
+
+    this.broadcast(S2C.VEHICLES, {
+      upsert: this.vehiclePayload(vehicle),
+      hit: {
+        i: vehicle.index,
+        by: shooter?.id ?? null,
+        amount: dealt,
+        destroyed,
+        at,
+      },
+    });
   }
 
   tickBattleRoyale(now) {
@@ -1286,13 +1338,16 @@ export class Room {
     player.crouching = (player.flags & FLAG.CROUCH) !== 0;
     if (driving) {
       const vehicle = this.vehicles.find(
-        (candidate) => candidate.index === player.vehicleId && candidate.driverId === player.id,
+        (candidate) => candidate.index === player.vehicleId
+          && candidate.driverId === player.id && !candidate.destroyed,
       );
       if (vehicle) {
         vehicle.pos = [...player.pos];
         vehicle.yaw = player.yaw;
         player.flags |= FLAG.VEHICLE;
-        this.broadcast(S2C.VEHICLES, { upsert: this.vehiclePayload(vehicle) });
+        // Normal player snapshots already carry the driver's position and yaw.
+        // Broadcasting a second, rounded vehicle transform for every snapshot
+        // made clients alternate between two timelines and visibly jitter.
       } else {
         player.vehicleId = null;
         player.flags &= ~FLAG.VEHICLE;
@@ -1394,6 +1449,35 @@ export class Room {
 
     for (const [victim, acc] of damageByVictim) {
       this.applyDamage(victim, player, acc.amount, weaponId, acc.head);
+    }
+
+    // Vehicles. Each pellet carries its own direction so a shotgun can clip the
+    // edge honestly. The server raycasts every report again and only accepts the
+    // nearest intact rover in front of all map geometry.
+    const vehicleReports = Array.isArray(msg.v) ? msg.v : [];
+    const remainingPellets = Math.max(0, getWeapon(weaponId).pellets - maxPellets);
+    const maxVehiclePellets = Math.min(vehicleReports.length, remainingPellets);
+    const vehicleDamage = new Map();
+    const weapon = getWeapon(weaponId);
+    for (let i = 0; i < maxVehiclePellets; i++) {
+      const report = vehicleReports[i];
+      if (!Number.isInteger(report?.i)) continue;
+      const pelletTrace = sanitiseShotTrace(player, msg.o, report.d);
+      const hit = this.raycastVehicle(pelletTrace.origin, pelletTrace.direction, weapon.range);
+      if (!hit || hit.vehicle.index !== report.i) continue;
+      const wall = raycastBoxes(
+        pelletTrace.origin,
+        pelletTrace.direction,
+        this.map.solids,
+        weapon.range,
+      );
+      if (wall && wall.t + 0.05 < hit.t) continue;
+      const damage = damageAtDistance(weapon, hit.t);
+      if (damage <= 0) continue;
+      vehicleDamage.set(hit.vehicle, (vehicleDamage.get(hit.vehicle) ?? 0) + damage);
+    }
+    for (const [vehicle, damage] of vehicleDamage) {
+      this.damageVehicle(vehicle, player, damage);
     }
 
     // Barrels. Deduplicated so one shotgun blast counts as one hit, not eight.

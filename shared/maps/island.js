@@ -236,7 +236,7 @@ function crownCitadel() {
 function blackwaterDocks() {
   const out = [
     surface(-214, 0, 92, 126, C.concreteDark),
-    surface(-255, 0, 10, 126, C.water, 'concrete'),
+    surface(-255, 0, 10, 126, C.water, 'concrete', 2),
   ];
 
   out.push(...building({
@@ -425,14 +425,14 @@ function falconAirfield() {
   const out = [
     surface(174, 180, 112, 126, C.grassLight),
     surface(178, 181, 22, 118, C.runway, 'concrete', 2),
-    surface(216, 181, 28, 72, C.concreteDark),
+    surface(216, 181, 28, 72, C.concreteDark, 'concrete', 2),
   ];
   // Runway threshold and centreline.
   for (let z = 131; z <= 231; z += 16) {
     out.push(surface(178, z, 2.2, 8, C.stripe, 'concrete', 3));
   }
   for (const x of [171, 178, 185]) {
-    out.push(surface(x, 126, 3, 12, C.stripe, 'concrete', 3));
+    out.push(surface(x, 126, 3, 12, C.stripe, 'concrete', 4));
   }
 
   out.push(...building({
@@ -492,12 +492,15 @@ function ashChapelRuins() {
 /** Arterial routes make rotations legible and connect every major POI. */
 function roads() {
   return [
-    surface(0, 0, 11, 500, C.road, 'concrete', 2),
-    surface(0, 0, 500, 11, C.road, 'concrete', 3),
-    surface(-174, 88, 9, 176, C.road, 'concrete', 4),
-    surface(174, 88, 9, 176, C.road, 'concrete', 5),
-    surface(-88, -176, 176, 9, C.road, 'concrete', 6),
-    surface(88, 176, 176, 9, C.road, 'concrete', 7),
+    // Roads occupy their own layer band above local area decoration. Previously
+    // the main north/south road shared layer 2 with railyard sleepers, leaving
+    // small but very visible patches of z-fighting at every crossing.
+    surface(0, 0, 11, 500, C.road, 'concrete', 8),
+    surface(0, 0, 500, 11, C.road, 'concrete', 9),
+    surface(-174, 88, 9, 176, C.road, 'concrete', 10),
+    surface(174, 88, 9, 176, C.road, 'concrete', 11),
+    surface(-88, -176, 176, 9, C.road, 'concrete', 12),
+    surface(88, 176, 176, 9, C.road, 'concrete', 13),
   ];
 }
 

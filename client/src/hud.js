@@ -139,7 +139,10 @@ export function showVehiclePrompt(vehicle, driving = false) {
   key.className = 'key';
   key.textContent = 'E';
   const label = document.createElement('span');
-  label.textContent = driving ? 'Exit rover' : 'Drive rover';
+  const health = driving && Number.isFinite(vehicle?.health)
+    ? ` · ${Math.max(0, Math.ceil(vehicle.health))} HP`
+    : '';
+  label.textContent = driving ? `Exit rover${health}` : 'Drive rover';
   p.append(key, label);
 }
 

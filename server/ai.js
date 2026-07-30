@@ -470,5 +470,17 @@ function shoot(room, bot, target, skill, now) {
   // shotgun deal about five damage while the same human weapon dealt 120.
   if (weapon.pellets > 1) damage *= weapon.pellets * (0.35 + Math.random() * 0.4);
 
-  room.applyDamage(target, bot, Math.round(damage), bot.weapon, headshot);
+  const occupiedVehicle = target.vehicleId != null
+    ? room.vehicles?.find(
+      (vehicle) => vehicle.index === target.vehicleId
+        && vehicle.driverId === target.id && !vehicle.destroyed,
+    )
+    : null;
+  if (occupiedVehicle) {
+    // The rover body is in front of its occupant. Bots use the same durability
+    // path as humans instead of magically shooting through the chassis.
+    room.damageVehicle(occupiedVehicle, bot, Math.round(damage));
+  } else {
+    room.applyDamage(target, bot, Math.round(damage), bot.weapon, headshot);
+  }
 }

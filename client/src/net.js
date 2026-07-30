@@ -258,7 +258,9 @@ export function sendState(net, player, flags, now, extra = null) {
   send(net, C2S.STATE, msg);
 }
 
-export function sendShot(net, { weaponId, origin, dir, hits, barrels }) {
+export function sendShot(net, {
+  weaponId, origin, dir, hits, barrels, vehicles,
+}) {
   const msg = {
     w: weaponId,
     o: [round2(origin[0]), round2(origin[1]), round2(origin[2])],
@@ -267,6 +269,12 @@ export function sendShot(net, { weaponId, origin, dir, hits, barrels }) {
   };
   // Only sent when a barrel was actually struck, which is rare.
   if (barrels?.length) msg.b = barrels;
+  if (vehicles?.length) {
+    msg.v = vehicles.map((hit) => ({
+      i: hit.i,
+      d: [round3(hit.d[0]), round3(hit.d[1]), round3(hit.d[2])],
+    }));
+  }
   send(net, C2S.SHOOT, msg);
 }
 

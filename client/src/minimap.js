@@ -223,6 +223,7 @@ export function drawFullMap(minimap, {
     ctx.fill();
   }
   for (const entry of vehicles?.entries?.values?.() ?? []) {
+    if (entry.destroyed) continue;
     ctx.save();
     ctx.translate(worldX(entry.group.position.x), worldZ(entry.group.position.z));
     ctx.rotate(entry.group.rotation.y);

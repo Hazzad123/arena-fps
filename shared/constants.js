@@ -116,6 +116,8 @@ export const VEHICLE_REVERSE_SPEED = 8;
 export const VEHICLE_ACCEL = 14;
 export const VEHICLE_TURN_SPEED = 1.8;
 export const VEHICLE_USE_RADIUS = 4;
+export const VEHICLE_HEALTH = 400;
+export const VEHICLE_DESTRUCTION_DAMAGE = 55;
 
 // ---------------------------------------------------------------- health packs
 // Pickups are NOT part of map.solids — you walk over them, you don't bump into

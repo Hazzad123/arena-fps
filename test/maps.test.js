@@ -61,6 +61,30 @@ test('battle royale has distinct named areas with useful loot', () => {
   }
 });
 
+test('battle royale floor overlays never share a coplanar render layer', () => {
+  const map = getMap('island');
+  const surfaces = map.solids
+    .map((solid, index) => ({ solid, index }))
+    .filter(({ solid }) => solid.tag?.startsWith('surface:'));
+  const layerOf = (solid) => Number(solid.tag.split(':')[2]) || 1;
+
+  for (let i = 0; i < surfaces.length; i++) {
+    for (let j = i + 1; j < surfaces.length; j++) {
+      const a = surfaces[i];
+      const b = surfaces[j];
+      if (layerOf(a.solid) !== layerOf(b.solid)) continue;
+      const overlapX = Math.min(a.solid.max[0], b.solid.max[0])
+        - Math.max(a.solid.min[0], b.solid.min[0]);
+      const overlapZ = Math.min(a.solid.max[2], b.solid.max[2])
+        - Math.max(a.solid.min[2], b.solid.min[2]);
+      assert.ok(
+        overlapX <= 0.01 || overlapZ <= 0.01,
+        `surface ${a.index} overlaps ${b.index} on layer ${layerOf(a.solid)}`,
+      );
+    }
+  }
+});
+
 for (const id of MAP_IDS) {
   test(`${id}: geometry is well formed`, () => {
     const map = getMap(id);

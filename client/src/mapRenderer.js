@@ -10,6 +10,26 @@ import { VIEW_DISTANCE } from '@shared/constants.js';
 import { loadModel, instantiate } from './models.js';
 
 const UNIT_CUBE = new THREE.BoxGeometry(1, 1, 1);
+const SKYBOX_FACES = ['px.png', 'nx.png', 'py.png', 'ny.png', 'pz.png', 'nz.png'];
+let skyboxPromise = null;
+
+function loadSkybox() {
+  if (!skyboxPromise) {
+    skyboxPromise = new THREE.CubeTextureLoader()
+      .setPath('textures/sky_14/')
+      .loadAsync(SKYBOX_FACES)
+      .then((texture) => {
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.minFilter = THREE.LinearMipmapLinearFilter;
+        texture.generateMipmaps = true;
+        return texture;
+      })
+      // A colour fallback keeps the game playable if a static host ever drops
+      // an asset during deployment.
+      .catch(() => null);
+  }
+  return skyboxPromise;
+}
 
 // ---------------------------------------------------------------- surfaces
 //
@@ -42,6 +62,7 @@ const TEXTURES = {
 
 /** Metres of world per texture tile, so tiling is consistent at any box size. */
 const textureCache = new Map();
+let maxTextureAnisotropy = 1;
 
 function getTexture(name) {
   if (textureCache.has(name)) return textureCache.get(name);
@@ -57,6 +78,11 @@ function getTexture(name) {
         tex.wrapS = THREE.RepeatWrapping;
         tex.wrapT = THREE.RepeatWrapping;
         tex.colorSpace = THREE.SRGBColorSpace;
+        // Large BR surfaces are often viewed at a grazing angle. Mipmaps stop
+        // distance shimmer; anisotropic filtering keeps roads readable without
+        // the high-frequency sparkle that looked like texture flicker.
+        tex.minFilter = THREE.LinearMipmapLinearFilter;
+        tex.anisotropy = maxTextureAnisotropy;
         return tex;
       })
       .catch(() => null),
@@ -98,6 +124,7 @@ function surfaceLayer(solid) {
 }
 
 export function createWorld(renderer) {
+  maxTextureAnisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
   const scene = new THREE.Scene();
 
   const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
@@ -165,6 +192,11 @@ export function loadMap(world, map) {
 
   // ---- atmosphere ----
   world.scene.background = new THREE.Color(map.skyColor);
+  loadSkybox().then((texture) => {
+    // Map rotation can happen while six faces are loading. Only apply the
+    // result to the map that is still current.
+    if (texture && world.current?.map === map) world.scene.background = texture;
+  });
   world.scene.fog = new THREE.FogExp2(map.fogColor, map.fogDensity ?? 0.01);
   world.hemi.intensity = map.ambientLight ?? 0.6;
   // Downward-facing surfaces take the hemisphere's ground colour, and on an
@@ -263,6 +295,10 @@ function buildSurfaces(map, mesh) {
     const tint = new THREE.Color(0xffffff).lerp(new THREE.Color(solid.color), tex.tint);
 
     const layer = surfaceLayer(solid);
+    // Give every authored overlay a unique depth rank inside its layer. Two
+    // large island patches used to overlap on the same layer, so their equal
+    // offsets still fought even though both were safely above the ground.
+    const depthRank = layer > 0 ? layer * 2048 + index : 0;
     const material = new THREE.MeshLambertMaterial({
       color: tint,
       // Roads, runways and fields are collision-flush with the island floor.
@@ -271,7 +307,7 @@ function buildSurfaces(map, mesh) {
       // depth while leaving their shared collision geometry untouched.
       polygonOffset: layer > 0,
       polygonOffsetFactor: layer > 0 ? -layer : 0,
-      polygonOffsetUnits: layer > 0 ? -4 * layer : 0,
+      polygonOffsetUnits: layer > 0 ? -depthRank : 0,
     });
 
     const box = new THREE.Mesh(UNIT_CUBE, material);
@@ -284,7 +320,9 @@ function buildSurfaces(map, mesh) {
       (solid.min[1] + solid.max[1]) / 2 + layer * 0.006,
       (solid.min[2] + solid.max[2]) / 2,
     );
-    box.castShadow = true;
+    // Flush paint should receive lighting, not cast a second shadow a few
+    // millimetres above the collision floor.
+    box.castShadow = layer === 0;
     box.receiveShadow = true;
     group.add(box);
 

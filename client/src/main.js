@@ -62,6 +62,7 @@ import {
 } from './battleroyale.js';
 import {
   createVehicles, setVehicles, clearVehicles, updateVehicles, nearestVehicle, vehicleForDriver,
+  raycastVehicles,
 } from './vehicles.js';
 
 // ---------------------------------------------------------------------- setup
@@ -149,6 +150,14 @@ const app = {
   lastEmoteAt: -Infinity,
   spectatorTargetId: null,
   spectatorStep: 0,
+  vehicleCamera: {
+    active: false,
+    initialized: false,
+    orbitYaw: 0,
+    orbitPitch: 0.32,
+    position: new THREE.Vector3(),
+    focus: new THREE.Vector3(),
+  },
   // Our own class. The server holds the authoritative copy; this is what the
   // pickers highlight, and it survives across sessions via settings.
   myGun: getPrimary(settings.primaryId),
@@ -1128,7 +1137,38 @@ net.on(connection, S2C.VEHICLES, (msg) => {
   if (msg.upsert) setVehicles(vehicles, msg.upsert);
   const previous = player.vehicleId;
   player.vehicleId = vehicleForDriver(vehicles, connection.myId);
-  if (previous !== null && player.vehicleId === null) player.vehicleSpeed = 0;
+  if (previous !== player.vehicleId) {
+    app.vehicleCamera.active = false;
+    app.vehicleCamera.initialized = false;
+  }
+  if (previous !== null && player.vehicleId === null) {
+    player.vehicleSpeed = 0;
+    player.vehicleSteer = 0;
+  }
+
+  if (msg.hit?.at) {
+    const now = performance.now();
+    spawnImpact(impacts, msg.hit.at, now, msg.hit.destroyed ? 0xff7b42 : 0xffc46a);
+    const eye = eyePosition(player);
+    const { pan, distance } = audio.spatialise(msg.hit.at, eye, player.yaw);
+
+    if (msg.hit.destroyed) {
+      spawnExplosion(explosions, msg.hit.at, 3.4, now);
+      audio.playExplosion({ pan, distance });
+      const falloff = Math.max(0, 1 - distance / 30);
+      app.shake = Math.min(1, app.shake + falloff * falloff * 0.8);
+    } else {
+      audio.playClick(0.55 + Math.random() * 0.12, { pan, distance });
+    }
+
+    if (msg.hit.by === connection.myId) {
+      const kind = msg.hit.destroyed ? 'kill' : 'hit';
+      hud.hitmarker(kind);
+      audio.playHitmarker(kind);
+      const screen = projectToScreen(msg.hit.at);
+      if (screen) hud.damageNumber(msg.hit.amount, screen.x, screen.y, kind);
+    }
+  }
 });
 
 net.on(connection, S2C.PICKUP, (msg) => {
@@ -1369,10 +1409,12 @@ function handleFiring(now, worldStates) {
   const hitboxes = worldStates ? hitboxesFrom(worldStates, connection.myId) : [];
   const reportedHits = [];
   const barrelsHit = [];
+  const vehiclesHit = [];
   let hitAnything = false;
 
   for (const dir of shot.dirs) {
     const wallHit = raycastBoxes(shot.origin, dir, app.map.solids, weapon.range);
+    const vehicleHit = raycastVehicles(vehicles, shot.origin, dir, weapon.range);
     const targetHit = app.range ? raycastTargets(app.range, shot.origin, dir, weapon.range) : null;
     const playerHit = hitboxes.length
       ? raycastPlayers(shot.origin, dir, hitboxes, weapon.range, connection.myId)
@@ -1382,6 +1424,7 @@ function handleFiring(now, worldStates) {
     // re-checks line of sight anyway.
     const candidates = [
       wallHit && { t: wallHit.t, kind: 'wall' },
+      vehicleHit && { t: vehicleHit.t, kind: 'vehicle' },
       targetHit && { t: targetHit.t, kind: 'target' },
       playerHit && { t: playerHit.t, kind: 'player' },
     ].filter(Boolean);
@@ -1416,6 +1459,10 @@ function handleFiring(now, worldStates) {
         const screen = projectToScreen(end);
         if (screen) hud.damageNumber(damage, screen.x, screen.y, kind);
         hitAnything = true;
+      } else if (nearest.kind === 'vehicle') {
+        vehiclesHit.push({ i: vehicleHit.entry.index, d: dir });
+        spawnImpact(impacts, end, now, 0xffc46a, true);
+        hitAnything = true;
       } else {
         spawnImpact(impacts, end, now);
         // A barrel is an ordinary solid, so the wall raycast already found it —
@@ -1441,6 +1488,7 @@ function handleFiring(now, worldStates) {
       dir: shot.dirs[0],
       hits: reportedHits,
       barrels: barrelsHit,
+      vehicles: vehiclesHit,
     });
   }
 }
@@ -1524,6 +1572,85 @@ function applySpectatorCamera(state) {
   camera.updateMatrixWorld();
 }
 
+const VEHICLE_CAMERA_DESIRED = new THREE.Vector3();
+const VEHICLE_CAMERA_FOCUS = new THREE.Vector3();
+const VEHICLE_CAMERA_DELTA = new THREE.Vector3();
+
+/** Smooth third-person chase camera used only while driving a BR rover. */
+function applyVehicleCamera(dt) {
+  const rig = app.vehicleCamera;
+  const distance = 6.8;
+  const viewYaw = player.yaw + rig.orbitYaw;
+  const horizontal = Math.cos(rig.orbitPitch) * distance;
+
+  // Look slightly ahead of the chassis so speed feels visible and the rover is
+  // framed in the lower third rather than hidden behind the reticle.
+  VEHICLE_CAMERA_FOCUS.set(
+    player.pos[0] - Math.sin(player.yaw) * 1.25,
+    player.pos[1] + 1.05,
+    player.pos[2] - Math.cos(player.yaw) * 1.25,
+  );
+  VEHICLE_CAMERA_DESIRED.set(
+    player.pos[0] + Math.sin(viewYaw) * horizontal,
+    player.pos[1] + 1.25 + Math.sin(rig.orbitPitch) * distance,
+    player.pos[2] + Math.cos(viewYaw) * horizontal,
+  );
+
+  // Pull the desired camera in front of walls instead of letting the chase
+  // camera clip through buildings when the rover passes close to one.
+  VEHICLE_CAMERA_DELTA.copy(VEHICLE_CAMERA_DESIRED).sub(VEHICLE_CAMERA_FOCUS);
+  let length = VEHICLE_CAMERA_DELTA.length();
+  if (length > 0.001) {
+    VEHICLE_CAMERA_DELTA.multiplyScalar(1 / length);
+    const wall = raycastBoxes(
+      [VEHICLE_CAMERA_FOCUS.x, VEHICLE_CAMERA_FOCUS.y, VEHICLE_CAMERA_FOCUS.z],
+      [VEHICLE_CAMERA_DELTA.x, VEHICLE_CAMERA_DELTA.y, VEHICLE_CAMERA_DELTA.z],
+      app.map.solids,
+      length,
+    );
+    if (wall) {
+      VEHICLE_CAMERA_DESIRED.copy(VEHICLE_CAMERA_FOCUS)
+        .addScaledVector(VEHICLE_CAMERA_DELTA, Math.max(0.45, wall.t - 0.3));
+    }
+  }
+
+  if (!rig.initialized) {
+    rig.position.copy(VEHICLE_CAMERA_DESIRED);
+    rig.focus.copy(VEHICLE_CAMERA_FOCUS);
+    rig.initialized = true;
+  } else {
+    rig.position.lerp(VEHICLE_CAMERA_DESIRED, 1 - Math.exp(-8 * dt));
+    rig.focus.lerp(VEHICLE_CAMERA_FOCUS, 1 - Math.exp(-11 * dt));
+  }
+
+  // Smoothing can briefly leave the old camera position behind a newly-adjacent
+  // wall, so clamp the final position as well as the desired one.
+  VEHICLE_CAMERA_DELTA.copy(rig.position).sub(rig.focus);
+  length = VEHICLE_CAMERA_DELTA.length();
+  if (length > 0.001) {
+    VEHICLE_CAMERA_DELTA.multiplyScalar(1 / length);
+    const wall = raycastBoxes(
+      [rig.focus.x, rig.focus.y, rig.focus.z],
+      [VEHICLE_CAMERA_DELTA.x, VEHICLE_CAMERA_DELTA.y, VEHICLE_CAMERA_DELTA.z],
+      app.map.solids,
+      length,
+    );
+    if (wall) {
+      rig.position.copy(rig.focus)
+        .addScaledVector(VEHICLE_CAMERA_DELTA, Math.max(0.45, wall.t - 0.3));
+    }
+  }
+
+  camera.position.copy(rig.position);
+  camera.lookAt(rig.focus);
+  const targetFov = Math.min(MAX_FOV, settings.fov + 4);
+  if (Math.abs(camera.fov - targetFov) > 0.01) {
+    camera.fov = targetFov;
+    camera.updateProjectionMatrix();
+  }
+  camera.updateMatrixWorld();
+}
+
 const EMOTE_INPUTS = [
   ['emoteWave', 'wave', 'Wave'],
   ['emoteYes', 'yes', 'Yes'],
@@ -1580,8 +1707,25 @@ function step(dt, now) {
   look.dx *= adsScale;
   look.dy *= adsScale;
 
-  player.yaw -= look.dx;
-  player.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, player.pitch - look.dy));
+  if (player.vehicleId !== null) {
+    const rig = app.vehicleCamera;
+    if (!rig.active) {
+      rig.active = true;
+      rig.initialized = false;
+      rig.orbitYaw = 0;
+      rig.orbitPitch = 0.32;
+    }
+    // Mouse look orbits the third-person camera; A/D owns chassis steering.
+    // Keeping those axes separate prevents tiny mouse corrections from jerking
+    // the whole rover sideways.
+    rig.orbitYaw -= look.dx;
+    rig.orbitPitch = Math.max(0.12, Math.min(0.62, rig.orbitPitch - look.dy));
+  } else {
+    app.vehicleCamera.active = false;
+    app.vehicleCamera.initialized = false;
+    player.yaw -= look.dx;
+    player.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, player.pitch - look.dy));
+  }
   app.lookDelta = look;
 
   // The death screen now releases the pointer for its clickable gun cards.
@@ -1705,6 +1849,7 @@ function step(dt, now) {
   }
 
   if (spectatorState) applySpectatorCamera(spectatorState);
+  else if (player.vehicleId !== null) applyVehicleCamera(dt);
   else applyToCamera(player, camera, settings.fov);
 
   // Explosion shake, applied after the camera is otherwise final. Rotational
@@ -1736,7 +1881,10 @@ function step(dt, now) {
       ? nearestVehicle(vehicles, player.pos, VEHICLE_USE_RADIUS)
       : null;
     if (player.vehicleId !== null || app.nearVehicle) {
-      hud.showVehiclePrompt(app.nearVehicle, player.vehicleId !== null);
+      const drivenVehicle = player.vehicleId !== null
+        ? vehicles.entries.get(player.vehicleId)
+        : null;
+      hud.showVehiclePrompt(drivenVehicle ?? app.nearVehicle, player.vehicleId !== null);
     } else {
       hud.showLootPrompt(app.nearLoot);
     }

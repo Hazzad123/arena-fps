@@ -175,19 +175,19 @@ const WEAPON_VIEW_SCALE = {
   lmg: 1.01,
   knife: 1.1,
 };
-// A few degrees of yaw shows the gun in three-quarter view instead of flat
-// side-on, which reads much better. Purely cosmetic — shots follow the camera.
-const BASE_YAW = -0.3;
+// Keep a restrained three-quarter angle: enough to read the receiver and stock,
+// but well short of the old pose that made long guns lean hard to the right.
+const BASE_YAW = -0.2;
 const WEAPON_POSE_YAW = {
-  pistol: -0.43,
-  revolver: -0.45,
-  machinepistol: -0.42,
-  shotgun: -0.35,
-  autoshotgun: -0.35,
-  dmr: -0.37,
-  sniper: -0.39,
-  antimateriel: -0.41,
-  lmg: -0.36,
+  pistol: -0.21,
+  revolver: -0.22,
+  machinepistol: -0.2,
+  shotgun: -0.2,
+  autoshotgun: -0.2,
+  dmr: -0.21,
+  sniper: -0.21,
+  antimateriel: -0.22,
+  lmg: -0.2,
 };
 // Every source pack uses a different unit scale. First-person guns are fitted to
 // a real silhouette length, uniformly, so a scope stays round and a stock does
@@ -598,9 +598,8 @@ export function updateWeaponView(view, dt, now, player, lookDelta) {
   m.group.position.copy(pos);
   m.group.rotation.set(
     BASE_PITCH + view.kick * 0.09,
-    (WEAPON_POSE_YAW[view.currentId] ?? BASE_YAW) * (1 - t)
-      + view.lowerAmount * 0.5 + reload.yaw,
-    view.lowerAmount * 0.25 + reload.roll,
+    (WEAPON_POSE_YAW[view.currentId] ?? BASE_YAW) * (1 - t) + reload.yaw,
+    reload.roll,
   );
 
   // A scoped sniper hides the model entirely — you're looking down the optic, and

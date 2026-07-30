@@ -53,7 +53,8 @@ export const input = {
   mouseDx: 0,
   mouseDy: 0,
   locked: false,
-  weaponSlot: 0, // 1..6 when a number key was hit this frame, else 0
+  weaponSlot: 0, // 1..8 when a number key was hit this frame, else 0
+  weaponCycle: 0, // -1 previous, +1 next; mouse wheel, consumed this frame
 };
 
 let canvas = null;
@@ -92,6 +93,15 @@ export function initInput(canvasEl) {
     input.mouseDx += e.movementX || 0;
     input.mouseDy += (e.movementY || 0) * (settings.invertY ? -1 : 1);
   });
+
+  // Wheel down advances through the inventory, wheel up goes back. Keep this
+  // as a single step per frame: high-resolution trackpads can emit dozens of
+  // tiny events for one gesture and must not skip the whole loadout.
+  document.addEventListener('wheel', (e) => {
+    if (!input.locked || e.deltaY === 0) return;
+    e.preventDefault();
+    input.weaponCycle = e.deltaY > 0 ? 1 : -1;
+  }, { passive: false });
 
   document.addEventListener('mousedown', (e) => {
     if (!input.locked) return;
@@ -162,6 +172,7 @@ export function consumePressed(action) {
 export function clearPressed() {
   input.pressed.clear();
   input.weaponSlot = 0;
+  input.weaponCycle = 0;
 }
 
 /** Drain accumulated look delta, scaled to radians. */

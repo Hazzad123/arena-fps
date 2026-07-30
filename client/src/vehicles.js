@@ -2,6 +2,8 @@
 // the normal local prediction path, so steering stays immediate on a real network.
 
 import * as THREE from 'three';
+import { VEHICLE_HEALTH } from '@shared/constants.js';
+import { raycastVehicle } from '@shared/vehicles.js';
 
 function buildRover() {
   const group = new THREE.Group();
@@ -58,7 +60,13 @@ function buildRover() {
     node.castShadow = true;
     node.receiveShadow = true;
   });
-  return { group, wheels, lastPos: new THREE.Vector3() };
+  return {
+    group,
+    wheels,
+    materials: [bodyMat, trimMat, darkMat, glassMat],
+    lastPos: new THREE.Vector3(),
+    targetPos: new THREE.Vector3(),
+  };
 }
 
 export function createVehicles(scene) {
@@ -67,9 +75,17 @@ export function createVehicles(scene) {
 
 function removeEntry(garage, entry) {
   garage.scene.remove(entry.group);
+  const geometries = new Set();
+  const materials = new Set();
   entry.group.traverse((node) => {
-    if (node.isMesh) node.geometry.dispose();
+    if (!node.isMesh) return;
+    geometries.add(node.geometry);
+    for (const material of Array.isArray(node.material) ? node.material : [node.material]) {
+      materials.add(material);
+    }
   });
+  for (const geometry of geometries) geometry.dispose();
+  for (const material of materials) material.dispose();
 }
 
 export function clearVehicles(garage) {
@@ -81,17 +97,50 @@ export function setVehicles(garage, items, replace = false) {
   if (replace) clearVehicles(garage);
   for (const state of items ?? []) {
     let entry = garage.entries.get(state.i);
+    const created = !entry;
     if (!entry) {
-      entry = { ...buildRover(), index: state.i, pos: state.p, yaw: state.y, driverId: state.d };
+      entry = {
+        ...buildRover(),
+        index: state.i,
+        pos: state.p,
+        yaw: state.y,
+        driverId: state.d,
+        health: state.h ?? VEHICLE_HEALTH,
+        destroyed: false,
+      };
       garage.entries.set(state.i, entry);
       garage.scene.add(entry.group);
     }
-    entry.pos = state.p;
+    entry.pos = [...state.p];
     entry.yaw = state.y;
     entry.driverId = state.d ?? null;
-    entry.group.position.set(state.p[0], state.p[1], state.p[2]);
-    entry.group.rotation.y = state.y;
-    entry.lastPos.copy(entry.group.position);
+    entry.health = state.h ?? entry.health ?? VEHICLE_HEALTH;
+    entry.targetPos.set(state.p[0], state.p[1], state.p[2]);
+
+    // Initial state needs an immediate position. Subsequent server packets are
+    // targets only: snapping here while updateVehicles interpolates every frame
+    // made the rover bounce between two competing transforms.
+    if (created) {
+      entry.group.position.copy(entry.targetPos);
+      entry.group.rotation.y = state.y;
+      entry.lastPos.copy(entry.group.position);
+    }
+    if (state.x && !entry.destroyed) markVehicleDestroyed(entry);
+  }
+}
+
+function markVehicleDestroyed(entry) {
+  entry.destroyed = true;
+  entry.driverId = null;
+  entry.group.rotation.z = 0.055;
+  entry.group.scale.y = 0.84;
+  for (const material of entry.materials) {
+    material.color.multiplyScalar(0.18);
+    if (material.emissive) {
+      material.emissive.setHex(0x090a09);
+      material.emissiveIntensity = 0;
+    }
+    if ('opacity' in material) material.opacity = Math.min(material.opacity, 0.48);
   }
 }
 
@@ -105,7 +154,7 @@ export function vehicleForDriver(garage, playerId) {
 export function nearestVehicle(garage, pos, maxDistance) {
   let best = null;
   for (const entry of garage.entries.values()) {
-    if (entry.driverId) continue;
+    if (entry.driverId || entry.destroyed) continue;
     const d = Math.hypot(
       pos[0] - entry.group.position.x,
       pos[1] - entry.group.position.y,
@@ -117,14 +166,32 @@ export function nearestVehicle(garage, pos, maxDistance) {
   return best;
 }
 
+/** Closest intact rover struck by a world-space ray. */
+export function raycastVehicles(garage, origin, direction, maxDistance) {
+  let best = null;
+  const pos = [0, 0, 0];
+  for (const entry of garage.entries.values()) {
+    if (entry.destroyed) continue;
+    pos[0] = entry.group.position.x;
+    pos[1] = entry.group.position.y;
+    pos[2] = entry.group.position.z;
+    const t = raycastVehicle(origin, direction, pos, entry.group.rotation.y, maxDistance);
+    if (t === null || (best && t >= best.t)) continue;
+    best = { entry, t };
+  }
+  return best;
+}
+
 export function updateVehicles(garage, dt, states, localPlayer, myId) {
   for (const entry of garage.entries.values()) {
     let pos = entry.pos;
     let yaw = entry.yaw;
-    if (entry.driverId === myId && localPlayer.vehicleId === entry.index) {
+    const locallyDriven = !entry.destroyed
+      && entry.driverId === myId && localPlayer.vehicleId === entry.index;
+    if (locallyDriven) {
       pos = localPlayer.pos;
       yaw = localPlayer.yaw;
-    } else if (entry.driverId) {
+    } else if (entry.driverId && !entry.destroyed) {
       const driver = states?.get(entry.driverId);
       if (driver) {
         pos = driver.pos;
@@ -132,14 +199,23 @@ export function updateVehicles(garage, dt, states, localPlayer, myId) {
       }
     }
 
-    const previous = entry.group.position.clone();
-    entry.group.position.lerp(new THREE.Vector3(pos[0], pos[1], pos[2]), Math.min(1, dt * 15));
-    let diff = yaw - entry.group.rotation.y;
-    while (diff > Math.PI) diff -= Math.PI * 2;
-    while (diff < -Math.PI) diff += Math.PI * 2;
-    entry.group.rotation.y += diff * Math.min(1, dt * 12);
+    entry.lastPos.copy(entry.group.position);
+    entry.targetPos.set(pos[0], pos[1], pos[2]);
+    if (locallyDriven) {
+      // Local prediction is already the smooth, freshest answer. Interpolating
+      // toward it adds a one-frame rubber band that the chase camera exposes.
+      entry.group.position.copy(entry.targetPos);
+      entry.group.rotation.y = yaw;
+    } else {
+      const positionAlpha = 1 - Math.exp(-12 * dt);
+      entry.group.position.lerp(entry.targetPos, positionAlpha);
+      let diff = yaw - entry.group.rotation.y;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      entry.group.rotation.y += diff * (1 - Math.exp(-10 * dt));
+    }
 
-    const travelled = entry.group.position.distanceTo(previous);
+    const travelled = entry.group.position.distanceTo(entry.lastPos);
     for (const wheel of entry.wheels) wheel.rotation.x -= travelled / 0.43;
   }
 }

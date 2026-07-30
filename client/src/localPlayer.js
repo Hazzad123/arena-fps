@@ -60,6 +60,7 @@ export function createLocalPlayer() {
     parachuting: false,
     vehicleId: null,
     vehicleSpeed: 0,
+    vehicleSteer: 0,
 
     // Weapons
     inventory: ['rifle', 'pistol', 'knife'],
@@ -110,6 +111,7 @@ export function spawnAt(p, point, solids, yaw = 0) {
   p.parachuting = false;
   p.vehicleId = null;
   p.vehicleSpeed = 0;
+  p.vehicleSteer = 0;
   p.recoilPitch = 0;
   p.recoilYaw = 0;
   // Belt and braces against an authoring slip putting a spawn in a wall.
@@ -255,9 +257,14 @@ function updateVehicleMovement(p, dt, solids, lethalFallY) {
   const delta = Math.max(-rate * dt, Math.min(rate * dt, target - p.vehicleSpeed));
   p.vehicleSpeed += delta;
 
+  // Ease steering input instead of applying the keyboard's instant -1/0/1
+  // changes directly to the chassis. It removes the twitch at key-down/key-up
+  // without making the rover feel disconnected.
+  const steerAlpha = 1 - Math.exp(-10 * dt);
+  p.vehicleSteer += (axes.x - p.vehicleSteer) * steerAlpha;
   const speedFactor = Math.min(1, Math.abs(p.vehicleSpeed) / 4);
   const reverse = p.vehicleSpeed < 0 ? -1 : 1;
-  p.yaw -= axes.x * VEHICLE_TURN_SPEED * speedFactor * reverse * dt;
+  p.yaw -= p.vehicleSteer * VEHICLE_TURN_SPEED * speedFactor * reverse * dt;
   if (p.yaw > Math.PI) p.yaw -= Math.PI * 2;
   if (p.yaw < -Math.PI) p.yaw += Math.PI * 2;
 
@@ -270,7 +277,11 @@ function updateVehicleMovement(p, dt, solids, lethalFallY) {
   moveAndCollide(p, dt, solids, p.height, p.radius);
   const moved = Math.hypot(p.pos[0] - beforeX, p.pos[2] - beforeZ);
   if (Math.abs(p.vehicleSpeed) > 1 && moved < Math.abs(p.vehicleSpeed) * dt * 0.25) {
-    p.vehicleSpeed *= 0.35;
+    // A hard collision used to retain 35% speed. Acceleration immediately put
+    // that speed back into the wall, creating a visible stop/start vibration.
+    p.vehicleSpeed = 0;
+    p.vel[0] = 0;
+    p.vel[2] = 0;
   }
 
   p.crouching = false;
@@ -554,7 +565,12 @@ export function handleWeaponInput(p, now) {
   if (input.weaponSlot > 0) {
     switchToSlot(p, input.weaponSlot, now);
     input.weaponSlot = 0;
+  } else if (input.weaponCycle !== 0 && p.inventory.length > 1) {
+    const next = (p.slotIndex + Math.sign(input.weaponCycle) + p.inventory.length)
+      % p.inventory.length;
+    switchTo(p, next, now);
   }
+  input.weaponCycle = 0;
 
   if (consumePressed('reload')) startReload(p, now);
 }

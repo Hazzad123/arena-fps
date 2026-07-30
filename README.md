@@ -38,7 +38,8 @@ To let people on your network join without deploying, give them
 | Aim down sights | Right mouse |
 | Reload | `R` |
 | Use / pick up | `E` |
-| Switch weapon | `1`–`8` |
+| Switch weapon | Mouse wheel or `1`–`8` |
+| Drive rover | `W`/`S` throttle · `A`/`D` steer · mouse camera · `E` exit |
 | Scoreboard | hold `Tab` |
 | Full tactical map | `M` |
 | Chat / team chat | `Enter` / `Shift` + `Enter` |
@@ -52,7 +53,8 @@ To let people on your network join without deploying, give them
 Free-for-all, Gun Game (every kill promotes you up
 pistol → SMG → shotgun → rifle → sniper → knife; win with a knife kill),
 co-op Survival waves, and a 45-player Battle Royale with parachute drops, ground
-loot, drivable rovers, named districts, an adaptive closing zone and spectators.
+loot, destructible rovers, named districts, a full skybox, an adaptive closing
+zone and spectators.
 
 **Lobby.** Players gather up to the selected mode's capacity, shown as open
 slots — split by team in TDM — with everyone's ready state. It starts when
