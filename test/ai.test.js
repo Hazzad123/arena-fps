@@ -42,7 +42,7 @@ function aiRoom(count, mode = 'ffa', skill = 'hard') {
   const room = new Room('TEST', mode);
   clearInterval(room.timer); // drive it by hand
   room.timer = null;
-  room.aiSkill = skill;
+  room.botDifficulty = skill;
   for (let i = 0; i < count; i++) room.addAiPlayer();
   room.beginRound();
   return room;
@@ -216,6 +216,25 @@ test('survival is playable alone', () => {
   assert.ok(room.wave, 'wave state should exist');
   room.dispose();
   restoreClock();
+});
+
+test('survival difficulty sets its starting floor while later waves escalate', () => {
+  const room = new Room('SKIL', 'waves');
+  try {
+    room.botDifficulty = 'easy';
+    assert.equal(room.waveSkill(1), 'easy');
+    assert.equal(room.waveSkill(3), 'normal');
+    assert.equal(room.waveSkill(7), 'hard');
+
+    room.botDifficulty = 'normal';
+    assert.equal(room.waveSkill(1), 'normal');
+    assert.equal(room.waveSkill(7), 'hard');
+
+    room.botDifficulty = 'hard';
+    assert.equal(room.waveSkill(1), 'hard');
+  } finally {
+    room.dispose();
+  }
 });
 
 test('survival spawns escalating waves and clears them', () => {
@@ -398,12 +417,13 @@ test('a taken pack comes back after its timer', () => {
 
 // ------------------------------------------------------------- battle royale
 
-function brRoom() {
+function brRoom(difficulty = 'normal') {
   installClock();
   const room = new Room('BR', 'br');
   clearInterval(room.timer);
   room.timer = null;
   const human = room.addPlayer({ id: 'h1', name: 'Solo', ws: null, primaryId: 'sniper' });
+  room.botDifficulty = difficulty;
   room.beginRound();
   return { room, human };
 }
@@ -415,6 +435,15 @@ test('battle royale plays the island and fills the lobby to thirty', () => {
   assert.equal(room.players.size, 30, 'every empty slot should be an AI');
   assert.equal(room.humanCount(), 1);
   assert.equal(room.minPlayers(), 1, 'bots fill the rest, so one person is a match');
+  room.dispose();
+  restoreClock();
+});
+
+test('battle royale autofill bots inherit the host difficulty', () => {
+  const { room } = brRoom('hard');
+  const bots = [...room.players.values()].filter((p) => p.isBot);
+  assert.equal(bots.length, 29);
+  for (const bot of bots) assert.equal(bot.ai.skill, 'hard');
   room.dispose();
   restoreClock();
 });

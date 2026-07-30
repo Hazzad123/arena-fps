@@ -375,13 +375,32 @@ test('a non-host cannot change the mode or the map', (t) => {
   assert.equal(room.mapId, mapId);
 });
 
+test('the host can set bot difficulty and existing bots update immediately', (t) => {
+  const { room, players } = makeRoom(t, 2, 'ffa');
+  room.handleSetBots(players[0], { n: 3 });
+
+  room.handleLobbySet(players[0], { botDifficulty: 'hard' });
+  assert.equal(room.botDifficulty, 'hard');
+  for (const bot of [...room.players.values()].filter((p) => p.isBot)) {
+    assert.equal(bot.ai.skill, 'hard');
+  }
+  assert.equal(room.lobbyState().botDifficulty, 'hard');
+
+  room.handleLobbySet(players[1], { botDifficulty: 'easy' });
+  assert.equal(room.botDifficulty, 'hard', 'a guest cannot lower the difficulty');
+
+  room.handleLobbySet(players[0], { botDifficulty: 'impossible' });
+  assert.equal(room.botDifficulty, 'hard', 'unknown difficulty values are ignored');
+});
+
 test('host controls are ignored once the match is live', (t) => {
   const { room, players } = makeRoom(t, 2);
   readyAll(room, players);
   room.beginRound();
 
-  room.handleLobbySet(players[0], { mode: 'ffa' });
+  room.handleLobbySet(players[0], { mode: 'ffa', botDifficulty: 'hard' });
   assert.notEqual(room.mode, 'ffa', 'changing mode mid-match would reassign teams under people');
+  assert.equal(room.botDifficulty, 'normal', 'changing difficulty mid-match would retune live bots');
 });
 
 // -------------------------------------------------------------- what clients see
@@ -396,6 +415,7 @@ test('the lobby payload tells a client everything it needs to draw the panel', (
   assert.equal(state.capacity, MAX_PLAYERS);
   assert.equal(state.minPlayers, MIN_PLAYERS_TO_START);
   assert.equal(state.mapId, room.mapId);
+  assert.equal(state.botDifficulty, 'normal');
   assert.equal(state.roster.length, 3);
 
   const entry = state.roster.find((p) => p.id === players[1].id);

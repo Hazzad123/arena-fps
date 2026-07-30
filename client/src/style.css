@@ -393,6 +393,28 @@ select:focus {
   grid-template-columns: 1fr 1fr;
   gap: 0.5rem;
 }
+.host-difficulty {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.host-difficulty label {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.host-hint {
+  min-height: 1.8em;
+  margin-top: 0.4rem;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  line-height: 1.4;
+}
 
 /* ======================== class + gun pickers ======================== */
 /* One component, three homes: the lobby, the pause menu and the death screen. */

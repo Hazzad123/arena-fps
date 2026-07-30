@@ -15,6 +15,7 @@ import {
   WAVE_BASE_ENEMIES, WAVE_ENEMIES_PER_WAVE,
   EMOTE_COOLDOWN_MS, BR_DROP_HEIGHT, BR_VICTORY_MS, BR_SCOREBOARD_MS,
   VEHICLE_MAX_SPEED, VEHICLE_USE_RADIUS, VEHICLE_HEALTH, VEHICLE_DESTRUCTION_DAMAGE,
+  BOT_DIFFICULTIES,
 } from '../shared/constants.js';
 import {
   S2C, PHASE, FLAG, MODES, EMOTES, encode, encodeSnapshot, sanitiseChat,
@@ -86,7 +87,7 @@ export class Room {
     // AI bookkeeping. aiSpawned only ever increases, so bot names don't repeat
     // within a room even as they're added and removed.
     this.aiSpawned = 0;
-    this.aiSkill = 'normal';
+    this.botDifficulty = 'normal';
 
     // Survival state. Null in every other mode.
     this.wave = null;
@@ -315,6 +316,7 @@ export class Room {
       minPlayers: this.minPlayers(),
       bots: this.players.size - this.humanCount(),
       maxBots: Math.max(0, this.capacity() - this.humanCount()),
+      botDifficulty: this.botDifficulty,
       startsInMs: this.graceEndsAt > 0 ? Math.max(0, this.graceEndsAt - Date.now()) : 0,
       roster: this.roster(),
     };
@@ -507,6 +509,21 @@ export class Room {
     ) {
       this.mapId = msg.mapId;
       this.map = getMap(this.mapId);
+      changed = true;
+    }
+
+    if (
+      typeof msg?.botDifficulty === 'string' &&
+      msg.botDifficulty !== this.botDifficulty &&
+      BOT_DIFFICULTIES.includes(msg.botDifficulty)
+    ) {
+      this.botDifficulty = msg.botDifficulty;
+      // Lobby bots already exist in arena modes. Apply the setting immediately
+      // rather than making it appear to work only after removing and re-adding
+      // them; Battle Royale's launch-time fill uses the same default below.
+      for (const p of this.players.values()) {
+        if (p.isBot && p.ai) p.ai.skill = this.botDifficulty;
+      }
       changed = true;
     }
 
@@ -787,9 +804,12 @@ export class Room {
   }
 
   waveSkill(n) {
-    if (n < 3) return 'easy';
-    if (n < 7) return 'normal';
-    return 'hard';
+    // Survival escalates, but never starts below the host's choice. Easy keeps
+    // the original easy -> normal -> hard curve, Normal starts steadier and
+    // reaches Hard late, and Hard stays uncompromising from wave one.
+    const waveFloor = n < 3 ? 0 : n < 7 ? 1 : 2;
+    const selected = Math.max(0, BOT_DIFFICULTIES.indexOf(this.botDifficulty));
+    return BOT_DIFFICULTIES[Math.max(waveFloor, selected)];
   }
 
   aliveEnemies() {
@@ -826,7 +846,6 @@ export class Room {
       w.spawned = 0;
       w.nextSpawnAt = 0;
       w.state = 'active';
-      this.aiSkill = this.waveSkill(w.number);
       // A new wave puts everyone back on their feet.
       for (const p of this.humans()) if (!p.alive) this.spawn(p);
       this.systemChat(`Wave ${w.number} — ${w.toSpawn} incoming`);
@@ -837,7 +856,7 @@ export class Room {
     // Trickle enemies in rather than dumping the whole wave at once: a wall of
     // twelve bots appearing together is a spike, not a fight.
     if (w.spawned < w.toSpawn && this.aliveEnemies() < WAVE_MAX_CONCURRENT && now >= w.nextSpawnAt) {
-      this.addAiPlayer({ team: TEAMS.B, skill: this.aiSkill });
+      this.addAiPlayer({ team: TEAMS.B, skill: this.waveSkill(w.number) });
       w.spawned += 1;
       w.nextSpawnAt = now + 700;
       this.broadcastWave();
@@ -860,7 +879,7 @@ export class Room {
       name: aiName(this.aiSpawned++),
       primaryId: primaryId ?? modes.randomPrimaryId(),
       team: team ?? null,
-      skill: skill ?? this.aiSkill ?? 'normal',
+      skill: skill ?? this.botDifficulty,
     });
     this.players.set(bot.id, bot);
     if (team === undefined && modes.isTeamMode(this.mode)) bot.team = modes.assignTeam(this, bot);

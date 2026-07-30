@@ -151,9 +151,11 @@ const HIP = new THREE.Vector3(0.1, -0.24, -1.0);
 // gun's centreline on the crosshair (which is what "align the sights" naively
 // suggests) parks the receiver directly over whatever you're shooting at.
 const ADS = new THREE.Vector3(0.0, -0.19, -0.9);
-const VIEW_SCALE = 1.0;
+// Slightly larger than the authored silhouette without swallowing the
+// crosshair. Hip fire remains shoulder-offset; ADS alone moves to x=0.
+const VIEW_SCALE = 1.1;
 // Shrink a little while aimed, so it intrudes even less.
-const ADS_SCALE = 0.82;
+const ADS_SCALE = 0.9;
 // Imported models vary wildly in height and bulk even after being fitted to
 // the procedural weapon's length. These values normalize their first-person
 // screen footprint while preserving the intended pistol/SMG/rifle hierarchy.

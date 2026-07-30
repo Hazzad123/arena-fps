@@ -127,6 +127,7 @@ const app = {
       hostId: null,
       capacity: MAX_PLAYERS,
       minPlayers: 2,
+      botDifficulty: 'normal',
       startsAt: 0,
     },
   },
@@ -171,7 +172,8 @@ for (const id of [
   'btn-practice', 'btn-quickplay', 'btn-join', 'btn-create', 'room-code', 'mode-select',
   'sens', 'sens-val', 'fov', 'fov-val', 'vol', 'vol-val', 'invert-y',
   'lobby-code', 'lobby-mode', 'lobby-count', 'lobby-slots', 'lobby-status',
-  'lobby-host', 'lobby-mode-select', 'lobby-map-select', 'lobby-class', 'lobby-class-picker',
+  'lobby-host', 'lobby-mode-select', 'lobby-map-select',
+  'lobby-difficulty-select', 'lobby-difficulty-hint', 'lobby-class', 'lobby-class-picker',
   'btn-copy-link', 'btn-leave', 'btn-ready', 'btn-start',
   'pause', 'pause-note', 'pause-class', 'pause-class-picker', 'pause-guns',
   'pause-gun-picker', 'pause-settings', 'btn-resume', 'btn-quit', 'btn-to-lobby',
@@ -748,10 +750,19 @@ function renderLobby() {
   dom['lobby-host'].classList.toggle('hidden', !iAmHost());
   const modeSelect = dom['lobby-mode-select'];
   const mapSelect = dom['lobby-map-select'];
+  const difficultySelect = dom['lobby-difficulty-select'];
   const fixedMap = m.mode === 'br';
   modeSelect.value = m.mode;
   mapSelect.value = app.map?.id ?? '';
+  difficultySelect.value = m.lobby.botDifficulty ?? 'normal';
   mapSelect.classList.toggle('hidden', fixedMap);
+  const difficultyHint = {
+    easy: 'Slower reactions, wider aim error and shorter tracking.',
+    normal: 'Balanced reactions, accuracy and target tracking.',
+    hard: 'Fast reactions, tighter aim and sustained pressure.',
+  }[difficultySelect.value];
+  dom['lobby-difficulty-hint'].textContent =
+    `${difficultyHint}${m.mode === 'waves' ? ' Survival still escalates in later waves.' : ''}`;
 
   // Everything below is only actionable once the room is actually in the lobby;
   // between rounds you're just waiting to be dropped into the next one.
@@ -761,6 +772,7 @@ function renderLobby() {
   dom['btn-ready'].disabled = !inLobbyPhase;
   modeSelect.disabled = !inLobbyPhase;
   mapSelect.disabled = !inLobbyPhase || fixedMap;
+  difficultySelect.disabled = !inLobbyPhase;
 
   dom['lobby-class'].classList.toggle('hidden', !gunChoiceMatters(m.mode));
   refreshGunPickers();
@@ -856,6 +868,12 @@ dom['lobby-map-select'].addEventListener('change', () => {
   net.send(connection, C2S.LOBBY_SET, { mapId: dom['lobby-map-select'].value });
 });
 
+dom['lobby-difficulty-select'].addEventListener('change', () => {
+  net.send(connection, C2S.LOBBY_SET, {
+    botDifficulty: dom['lobby-difficulty-select'].value,
+  });
+});
+
 // ------------------------------------------------------------- network events
 
 net.on(connection, S2C.ERROR, (msg) => {
@@ -914,6 +932,7 @@ function applyLobbyState(msg) {
   m.lobby.hostId = msg.hostId ?? null;
   m.lobby.capacity = msg.capacity ?? MAX_PLAYERS;
   m.lobby.minPlayers = msg.minPlayers ?? 2;
+  m.lobby.botDifficulty = msg.botDifficulty ?? m.lobby.botDifficulty;
   m.lobby.startsAt = msg.startsInMs > 0 ? performance.now() + msg.startsInMs : 0;
   if (msg.roster) updateRoster(msg.roster);
   if (msg.mapId && msg.mapId !== app.map?.id) applyMap(msg.mapId);

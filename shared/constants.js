@@ -173,3 +173,6 @@ export const VIEW_DISTANCE = 480;
 export const TEAMS = { A: 'A', B: 'B' };
 export const TEAM_COLORS = { A: 0x4a90d9, B: 0xd95a4a };
 export const FFA_COLOR = 0xc8a44a;
+// Host-selectable AI tuning. Shared so invalid wire values never silently
+// create a fourth difficulty that falls back to Normal.
+export const BOT_DIFFICULTIES = Object.freeze(['easy', 'normal', 'hard']);
