@@ -95,7 +95,11 @@ export class Room {
     this.vehicles = [];
     this.botTarget = 0;
 
-    this.timer = setInterval(() => this.tick(), TICK_MS);
+    // Consecutive tick failures. A room that cannot tick is a room nobody can
+    // play in, so it gets closed rather than left looping and filling the log.
+    this.tickFailures = 0;
+
+    this.timer = setInterval(() => this.safeTick(), TICK_MS);
     // Don't hold the process open on an idle room.
     this.timer.unref?.();
   }
@@ -1587,6 +1591,34 @@ export class Room {
   }
 
   // ------------------------------------------------------------------- tick
+
+  /**
+   * The interval entry point.
+   *
+   * The message handler has been wrapped in a try/catch since early on, on the
+   * grounds that one bad message shouldn't take down a room full of people. The
+   * tick had no such guard, and it deserves one far more: it runs twenty times a
+   * second for every room, it touches AI, the zone, vehicles, waves and spawning,
+   * and an exception thrown from a setInterval callback is an uncaught exception —
+   * which ends the process and every *other* match on the server with it.
+   *
+   * A room that fails repeatedly is unplayable by definition, so it is closed
+   * rather than left throwing forever.
+   */
+  safeTick() {
+    try {
+      this.tick();
+      this.tickFailures = 0;
+    } catch (err) {
+      this.tickFailures += 1;
+      console.error(`room ${this.code} tick failed (${this.tickFailures}):`, err.stack ?? err.message);
+      if (this.tickFailures >= 5) {
+        console.error(`room ${this.code} closed after repeated tick failures`);
+        this.systemChat('Something went wrong in this room. Please start a new one.');
+        this.dispose();
+      }
+    }
+  }
 
   tick() {
     if (this.closed) return;
