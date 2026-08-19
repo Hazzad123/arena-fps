@@ -785,6 +785,45 @@ export function createExplosions(scene) {
   return { pool, next: 0 };
 }
 
+/**
+ * Deactivate every pooled effect.
+ *
+ * These are fixed-size pools allocated once at startup and recycled, so this
+ * hides and expires them rather than disposing anything — disposing would leave
+ * the pool holding dead GPU resources for the rest of the session. The reason to
+ * do it at all is continuity: a tracer or a blast still fading when the map
+ * changes otherwise hangs in mid-air over the new level.
+ */
+export function clearTracers(tracers) {
+  for (const slot of tracers.pool) {
+    slot.mesh.visible = false;
+    slot.mat.opacity = 0;
+    slot.life = 0;
+    slot.until = 0;
+  }
+  tracers.next = 0;
+}
+
+export function clearImpacts(impacts) {
+  for (const slot of impacts.pool) {
+    slot.mesh.visible = false;
+    slot.mat.opacity = 0;
+    slot.until = 0;
+  }
+  impacts.next = 0;
+}
+
+export function clearExplosions(explosions) {
+  for (const slot of explosions.pool) {
+    slot.mesh.visible = false;
+    slot.mat.opacity = 0;
+    slot.light.visible = false;
+    slot.light.intensity = 0;
+    slot.until = 0;
+  }
+  explosions.next = 0;
+}
+
 export function spawnExplosion(explosions, at, radius, now) {
   const slot = explosions.pool[explosions.next];
   explosions.next = (explosions.next + 1) % explosions.pool.length;

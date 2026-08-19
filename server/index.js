@@ -94,8 +94,20 @@ app.get('/api/rooms', (_req, res) => {
 if (IS_PROD) {
   const dist = path.join(__dirname, '..', 'dist');
   app.use(express.static(dist, { maxAge: '1h', index: false }));
-  // Single page app: every non-API route serves the shell so /#CODE links work.
-  app.get(/.*/, (_req, res) => res.sendFile(path.join(dist, 'index.html')));
+
+  // Single page app: navigation routes serve the shell so /#CODE links work.
+  //
+  // The narrowing matters more than it looks. A bare catch-all answers *every*
+  // unmatched GET with the 16KB HTML shell and a 200, including requests for
+  // assets that aren't there. That hides missing files completely — the network
+  // tab shows a row of cheerful 200s while textures silently fall back to flat
+  // colours — and it bills a full page load for each one. Anything that looks
+  // like a file, or that didn't ask for HTML, gets an honest 404.
+  app.get(/.*/, (req, res, next) => {
+    const looksLikeAFile = path.extname(req.path) !== '';
+    if (looksLikeAFile || !req.accepts('html')) return next();
+    res.sendFile(path.join(dist, 'index.html'));
+  });
 }
 
 const server = http.createServer(app);

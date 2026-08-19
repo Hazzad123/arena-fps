@@ -28,24 +28,60 @@ To let people on your network join without deploying, give them
 
 ## Playing
 
+On first load the game asks how you're playing, because the three devices need
+genuinely different bindings rather than a shared set with different sensitivity.
+The choice is remembered and can be changed under Settings at any time.
+
+| | Mouse & keyboard | Laptop trackpad | Controller |
+|---|---|---|---|
+| Look | mouse | drag the trackpad | right stick |
+| Fire | hold left-click | hold `Space` | right trigger |
+| Aim down sights | hold right-click | `Q` (toggles) | left trigger |
+| Jump | `Space` | `F` | `A` |
+| Sprint | `Shift` | `Shift` | click left stick |
+| Crouch | `Ctrl` / `C` | `Ctrl` / `C` | `B` |
+| Reload | `R` | `R` | `X` |
+| Use / pick up | `E` | `E` | `Y` |
+| Switch weapon | wheel or `1`–`8` | wheel or `1`–`8` | `LB` / `RB` |
+| Melee | `1`–`8` to the knife | same | click right stick |
+| Scoreboard | hold `Tab` | hold `Tab` | hold `Back` |
+| Pause | `Esc` | `Esc` | `Start` |
+
+**Why the trackpad scheme exists.** A right-click on a trackpad is a two-finger
+tap or a corner press — not something you can do while dragging to aim — and
+holding a click down while dragging is worse. So firing and aiming both move to
+the keyboard, leaving the trackpad doing nothing but aiming, and aim becomes a
+toggle rather than a hold. Look sensitivity defaults much higher there too: a
+trackpad has a fraction of a mouse's travel and you have to lift and reposition
+constantly, which stops the motion dead.
+
+**Controller aim assist.** Stick aim gets a rotational slowdown — the turn rate
+drops to 55% within 7° of a visible opponent inside 90m. It never moves your aim
+for you, and it won't engage through a wall, which would otherwise quietly reveal
+where people are hiding. It applies to stick input only, so mouse and trackpad
+players are unaffected, and it can be switched off in Settings.
+
+**Accessibility.** Aim can be a toggle rather than a hold in any scheme, not just
+the trackpad one. Camera shake follows `prefers-reduced-motion` by default —
+rotational shake on a first-person camera is a common motion-sickness trigger, and
+if you've told your OS to reduce motion you shouldn't have to say it again — with
+a manual override either way. The control-scheme chooser answers to `1`–`3`, to
+Tab and Enter, or to any button on a connected controller, so picking "Controller"
+never requires reaching for a mouse.
+
+The in-game reference under Settings → Controls is generated from the active
+scheme, so it always shows the bindings you actually have.
+
+### Everything else
+
 | | |
 |---|---|
-| Move | `W A S D` |
-| Sprint | `Shift` (forward only) |
-| Crouch | `Ctrl` or `C` (smoothly, ~150ms) |
-| Jump | `Space` |
-| Fire | Left mouse |
-| Aim down sights | Right mouse |
-| Reload | `R` |
-| Use / pick up | `E` |
-| Switch weapon | Mouse wheel or `1`–`8` |
+| Move | `W A S D` (analogue on a stick — a half-pushed stick walks) |
 | Drive rover | `W`/`S` throttle · `A`/`D` steer · mouse camera · `E` exit |
-| Scoreboard | hold `Tab` |
 | Full tactical map | `M` |
 | Chat / team chat | `Enter` / `Shift` + `Enter` |
 | Emotes | `Z` wave · `X` yes · `V` no |
 | Reset practice targets | `T` |
-| Pause menu | `Esc` (again to resume) |
 | Quick-pick gun type | `1`–`6` while dead or paused |
 | Back to lobby | `L` on the results screen |
 
@@ -53,7 +89,7 @@ To let people on your network join without deploying, give them
 Free-for-all, Gun Game (every kill promotes you up
 pistol → SMG → shotgun → rifle → sniper → knife; win with a knife kill),
 co-op Survival waves, and a 30-player Battle Royale with parachute drops, ground
-loot, destructible rovers, named districts, a full skybox, an adaptive closing
+loot, destructible rovers, named districts, a generated gradient sky, an adaptive closing
 zone and spectators.
 
 **Lobby.** Players gather up to the selected mode's capacity, shown as open
@@ -125,18 +161,23 @@ the match.
 | 17 weapon models | first-person viewmodels; the character rig supplies 8 simplified held variants for remote players | Toon Shooter Game Kit (Quaternius) |
 | `Character_Soldier` | remote players, with the kit's own animation clips | Toon Shooter Game Kit (Quaternius) |
 | 16 environment props | crates and solid cover in the maps, plus wall dressing | Toon Shooter Game Kit (Quaternius) |
-| 5 surface textures | floors and walls, tiled by world size | 50 Free Stylized Wall Textures |
-| 11 terrain and material textures | grass, dirt, roads, water, roofs, masonry, metal and wood | Tiny Texture Packs 1 & 2 (Screaming Brain Studios) |
+| 11 terrain and material textures | every textured surface: grass, dirt, roads, water, roofs, masonry, brick, stone, pavers, plaster, metal and wood | Tiny Texture Packs 1 & 2 (Screaming Brain Studios) |
 
 The Quaternius kit and both Screaming Brain Studios packs are **CC0** (public
-domain) — their `License.txt` files say so explicitly. Shipped assets total
-~6.2MB, none of it in the JS bundle.
+domain) — their `License.txt` files say so explicitly, and a copy travels with the
+textures. Everything shipped is either CC0 or generated at runtime.
 
-> **The wall-texture pack shipped without a licence file.** Four of the five
-> textures in `client/public/textures` derive from it. That's worth resolving
-> before this goes anywhere public — either confirm the terms or swap those four
-> for something with a licence attached. The models and the game code are
-> unaffected.
+Two things were removed when this repo went public, both for the same reason:
+
+- **Five wall textures** came from a "50 Free Stylized Wall Textures" pack that
+  shipped with no licence file of any kind. Redistributing that publicly isn't
+  defensible, so the five names (`brick`, `blockwork`, `cobbles`, `redbrick`,
+  `concrete`) were repointed at the CC0 Screaming Brain textures. Maps reference
+  textures by name, so no map changed.
+- **The skybox** was a six-face cubemap with no licence and no traceable source.
+  It is now generated from each map's own `skyColor` and `fogColor` — which is
+  both free of licensing questions and a better fit, since the horizon now always
+  matches the fog it fades into. It also dropped 1.1MB.
 
 Source packs live in `Assets/`, which is gitignored: only the small curated subset
 under `client/public` is committed.

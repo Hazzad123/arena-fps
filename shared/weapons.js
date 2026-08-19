@@ -573,10 +573,30 @@ export function loadoutForPrimary(id) {
 export const ALL_WEAPON_IDS = WEAPON_TYPES.flatMap((t) => weaponsOfType(t.id).map((w) => w.id))
   .concat(Object.keys(WEAPONS).filter((id) => WEAPONS[id].type === 'melee'));
 
+/**
+ * Look up a weapon, throwing if it doesn't exist.
+ *
+ * Throwing is the right contract for our own code — a typo'd id should be loud —
+ * but it is the wrong one for anything a client sent us. Use maybeWeapon() there.
+ */
 export function getWeapon(id) {
   const w = WEAPONS[id];
   if (!w) throw new Error(`unknown weapon: ${id}`);
   return w;
+}
+
+/**
+ * Look up a weapon that may not exist, for ids that arrived over the wire.
+ *
+ * validate.js used getWeapon() and then checked the result for falsiness, which
+ * cannot happen — getWeapon throws first. So the guards were dead code, and a shot
+ * message naming a nonexistent weapon threw instead of being refused. Nothing
+ * crashed, because handleMessage catches, but every such message wrote a stack
+ * trace: at the 140-messages-a-second rate limit that is a cheap way to fill a
+ * log. An unknown weapon should be a quiet "no", not an exception.
+ */
+export function maybeWeapon(id) {
+  return typeof id === 'string' ? WEAPONS[id] ?? null : null;
 }
 
 /** Milliseconds between shots. */

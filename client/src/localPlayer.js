@@ -41,7 +41,10 @@ import {
   clampHorizontalSpeed, moveAndCollide, playerOverlapsAny, pushOutOfSolids,
 } from '@shared/collision.js';
 import { getWeapon, fireIntervalMs } from '@shared/weapons.js';
-import { input, moveAxes, consumeLook, consumePressed } from './input.js';
+import {
+  input, moveAxes, consumeLook, consumePressed,
+  sprintHeld, crouchHeld, firingHeld, jumpHeld,
+} from './input.js';
 
 export function createLocalPlayer() {
   return {
@@ -222,7 +225,7 @@ export function updateLocalPlayer(p, dt, solids, opts = {}) {
   clampHorizontalSpeed(p, SPRINT_SPEED * weapon.moveMult);
 
   // ---- vertical ----
-  if (p.onGround && input.jump && !p.crouching) {
+  if (p.onGround && jumpHeld() && !p.crouching) {
     p.vel[1] = JUMP_VELOCITY;
     p.onGround = false;
   }
@@ -299,7 +302,7 @@ function updateVehicleMovement(p, dt, solids, lethalFallY) {
 function targetSpeed(p, axes, weapon) {
   let speed = WALK_SPEED;
   // Sprint only forwards — backpedalling at 9m/s looks and feels wrong.
-  if (input.sprint && axes.z > 0.5 && !input.ads && p.crouchAmount < 0.2) speed = SPRINT_SPEED;
+  if (sprintHeld() && axes.z > 0.5 && !input.ads && p.crouchAmount < 0.2) speed = SPRINT_SPEED;
   // Blend toward crouch speed as you go down, so the slowdown matches what the
   // camera is doing rather than snapping at the halfway point.
   speed = speed + (CROUCH_SPEED - speed) * p.crouchAmount;
@@ -346,7 +349,7 @@ function accelerate(p, dirX, dirZ, wishSpeed, dt) {
  * and releasing crouch leaves you crouched instead of clipping through the roof.
  */
 function updateCrouch(p, dt, solids) {
-  const target = input.crouch ? PLAYER_CROUCH_HEIGHT : PLAYER_HEIGHT;
+  const target = crouchHeld() ? PLAYER_CROUCH_HEIGHT : PLAYER_HEIGHT;
   const step = CROUCH_TRANSITION_SPEED * dt;
 
   if (target < p.height) {
@@ -446,7 +449,7 @@ export function tryFire(p, now, firePressedThisFrame) {
   if (isReloading(p, now)) return null;
   if (now - p.lastShotAt < fireIntervalMs(weapon)) return null;
 
-  const wantsToShoot = weapon.auto ? input.firing : firePressedThisFrame;
+  const wantsToShoot = weapon.auto ? firingHeld() : firePressedThisFrame;
   if (!wantsToShoot) return null;
 
   if (ammoInMag(p) <= 0) {

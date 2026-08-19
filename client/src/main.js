@@ -14,14 +14,22 @@ import {
   ALL_WEAPON_IDS, getWeapon, PRIMARY_IDS, getPrimary,
   WEAPON_TYPES, weaponsOfType,
 } from '@shared/weapons.js';
-import { raycastBoxes, raycastPlayers } from '@shared/collision.js';
+import { raycastBoxes, raycastPlayers, hasLineOfSight } from '@shared/collision.js';
 import { C2S, S2C, PHASE, FLAG, MODE_NAMES, hasFlag } from '@shared/protocol.js';
 
-import { settings, saveSettings, ensureNickname } from './settings.js';
+import {
+  settings, saveSettings, ensureNickname,
+  applyScheme, needsSchemeChoice, guessScheme, shakeEnabled,
+} from './settings.js';
 import {
   initInput, input, requestLock, exitLock, onLockChange,
-  consumePressed, consumeLook, clearPressed,
+  consumePressed, consumeLook, clearPressed, clearAds,
+  sprintHeld, firingHeld, scoreboardHeld,
 } from './input.js';
+import {
+  pollGamepads, pollGamepadPauseOnly, padEngaged, padConnected,
+  releaseGamepad, resetGamepad, consumePadPause, consumePadKnife,
+} from './gamepad.js';
 import {
   createRenderer, createCamera, createWorld, loadMap, unloadMap, scorchBarrel,
 } from './mapRenderer.js';
@@ -35,6 +43,7 @@ import {
   createTracers, spawnTracer, updateTracers,
   createImpacts, spawnImpact, updateImpacts, muzzleWorldPosition,
   createExplosions, spawnExplosion, updateExplosions,
+  clearTracers, clearImpacts, clearExplosions,
 } from './weaponView.js';
 import * as hud from './hud.js';
 import {
@@ -129,6 +138,9 @@ const app = {
       minPlayers: 2,
       botDifficulty: 'normal',
       startsAt: 0,
+      // AI in the room, and how many more would fit. Both come from the server.
+      bots: 0,
+      maxBots: 0,
     },
   },
   pendingReports: { fallDamage: 0, void: false },
@@ -138,6 +150,10 @@ const app = {
   placed: 0,
   lastCountdownBeep: -1,
   nearLoot: null,
+  // Last frame's interpolated world, kept so aim assist has targets to test
+  // against at the top of the next frame. A frame of lag is immaterial for a
+  // slowdown effect.
+  lastWorldStates: null,
   nearVehicle: null,
   aliveCount: 0,
   aliveTotal: 0,
@@ -174,12 +190,17 @@ for (const id of [
   'lobby-code', 'lobby-mode', 'lobby-count', 'lobby-slots', 'lobby-status',
   'lobby-host', 'lobby-mode-select', 'lobby-map-select',
   'lobby-difficulty-select', 'lobby-difficulty-hint', 'lobby-class', 'lobby-class-picker',
+  'lobby-bots-count', 'btn-bots-down', 'btn-bots-up', 'lobby-bots-row',
   'btn-copy-link', 'btn-leave', 'btn-ready', 'btn-start',
   'pause', 'pause-note', 'pause-class', 'pause-class-picker', 'pause-guns',
   'pause-gun-picker', 'pause-settings', 'btn-resume', 'btn-quit', 'btn-to-lobby',
   'p-sens', 'p-sens-val', 'p-fov', 'p-fov-val', 'p-vol', 'p-vol-val', 'p-invert-y',
   'respawn', 'respawn-class', 'respawn-class-picker',
   'spectator', 'spectator-name', 'spectator-prev', 'spectator-next',
+  'scheme-picker', 'scheme-options', 'scheme-note', 'controls-grid',
+  'btn-scheme', 'scheme-name', 'pad-sens', 'pad-sens-val', 'ads-toggle', 'aim-assist',
+  'p-btn-scheme', 'p-scheme-name', 'p-pad-sens', 'p-pad-sens-val',
+  'p-ads-toggle', 'p-aim-assist', 'shake', 'p-shake',
 ]) dom[id] = document.getElementById(id);
 
 dom['spectator-prev'].addEventListener('click', () => {
@@ -198,6 +219,188 @@ for (const m of mapList()) {
   dom['lobby-map-select'].appendChild(option);
 }
 
+// ------------------------------------------------------- control scheme picker
+//
+// Asked once, before the menu is usable. It is a modal rather than a settings
+// row because the three devices need genuinely different bindings: someone on a
+// trackpad who is never told that Space fires will conclude the game is broken,
+// not that they picked the wrong option.
+
+/** One-line summary of the bindings a scheme uses, shown after choosing. */
+const SCHEME_SUMMARY = {
+  mouse: 'Hold left-click to fire, right-click to aim, Space to jump.',
+  trackpad: 'Space fires, Q toggles aim, F jumps — no right-click needed.',
+  pad: 'Right trigger fires, left trigger aims, A jumps. START pauses.',
+};
+
+function schemeSummary(scheme) {
+  return SCHEME_SUMMARY[scheme] ?? '';
+}
+
+/**
+ * Text for the practice range's control hint, which is the one place the
+ * bindings are spelled out in-game.
+ */
+function practiceHint() {
+  const common = '1–8 pick a gun · R reload · T reset';
+  if (settings.scheme === 'trackpad') return `${common} · Space fire · Q aim · F jump · Esc pause`;
+  if (settings.scheme === 'pad') return `${common} · RT fire · LT aim · A jump · START pause`;
+  return `${common} · click fire · right-click aim · Esc pause`;
+}
+
+function refreshControlHints() {
+  const hint = document.querySelector('.pr-hint');
+  if (hint) hint.textContent = practiceHint();
+  renderControlsReference();
+}
+
+/**
+ * The in-game controls reference, per scheme.
+ *
+ * Generated rather than written into the HTML, because it used to be hardcoded to
+ * the mouse bindings: a trackpad player would pause, read "fire: LMB", and be told
+ * to do the one thing their scheme deliberately avoids. A reference that disagrees
+ * with the bindings is worse than no reference at all.
+ *
+ * Values are per scheme where they differ and shared where they don't, so the rows
+ * stay in one place and can't drift apart.
+ */
+const CONTROLS_REFERENCE = [
+  ['Move', { mouse: 'W A S D', trackpad: 'W A S D', pad: 'Left stick / W A S D' }],
+  ['Look', { mouse: 'Mouse', trackpad: 'Drag the trackpad', pad: 'Right stick' }],
+  ['Fire', { mouse: 'Hold LMB', trackpad: 'Hold Space', pad: 'RT' }],
+  ['Aim down sights', { mouse: 'Hold RMB', trackpad: 'Q (toggles)', pad: 'LT' }],
+  ['Jump', { mouse: 'Space', trackpad: 'F', pad: 'A' }],
+  ['Sprint / crouch', { mouse: 'Shift / Ctrl or C', trackpad: 'Shift / Ctrl or C', pad: 'L3 / B' }],
+  ['Reload / use', { mouse: 'R / E', trackpad: 'R / E', pad: 'X / Y' }],
+  ['Switch weapon', { mouse: 'Wheel or 1–8', trackpad: 'Wheel or 1–8', pad: 'LB / RB' }],
+  ['Melee', { mouse: 'Knife slot', trackpad: 'Knife slot', pad: 'R3' }],
+  ['Scoreboard', { mouse: 'Hold Tab', trackpad: 'Hold Tab', pad: 'Hold Back' }],
+  ['Chat / team chat', { mouse: 'Enter / Shift+Enter', trackpad: 'Enter / Shift+Enter', pad: 'Enter / Shift+Enter' }],
+  ['Full tactical map', { mouse: 'M', trackpad: 'M', pad: 'M' }],
+  ['Drive / steer', { mouse: 'W S / A D', trackpad: 'W S / A D', pad: 'Left stick' }],
+  ['Wave / yes / no', { mouse: 'Z / X / V', trackpad: 'Z / X / V', pad: 'D-pad ← ↑ ↓' }],
+  ['Pause', { mouse: 'Esc', trackpad: 'Esc', pad: 'Start' }],
+];
+
+function renderControlsReference() {
+  const scheme = settings.scheme ?? 'mouse';
+  const grid = dom['controls-grid'];
+  if (!grid) return;
+  grid.replaceChildren();
+  for (const [label, values] of CONTROLS_REFERENCE) {
+    const name = document.createElement('span');
+    name.textContent = label;
+    const keys = document.createElement('kbd');
+    keys.textContent = values[scheme] ?? values.mouse;
+    grid.append(name, keys);
+  }
+}
+
+function openSchemePicker() {
+  const guess = guessScheme();
+  for (const card of dom['scheme-options'].querySelectorAll('.scheme-card')) {
+    const scheme = card.dataset.scheme;
+    // Highlight the current choice if there is one, otherwise the platform guess.
+    const highlight = settings.scheme ? scheme === settings.scheme : scheme === guess;
+    card.classList.toggle('recommended', highlight);
+  }
+  dom['scheme-note'].textContent = padConnected()
+    ? 'Controller detected — press any button on it to use it.'
+    : 'Click, press 1–3, or Tab and Enter.';
+  dom['scheme-picker'].classList.remove('hidden');
+  // Focus the highlighted card so Tab and Enter start somewhere sensible.
+  dom['scheme-options'].querySelector('.scheme-card.recommended')?.focus();
+  watchForPad();
+}
+
+function closeSchemePicker() {
+  dom['scheme-picker'].classList.add('hidden');
+  clearInterval(schemePadPoll);
+  schemePadPoll = null;
+}
+
+function chooseScheme(scheme) {
+  applyScheme(scheme);
+  // The scheme carries tuning defaults with it, so the sliders have to catch up.
+  syncSettingInputs();
+  refreshControlHints();
+  clearAds();
+  audio.playClick();
+  dom['menu-footer'].textContent = schemeSummary(scheme);
+  closeSchemePicker();
+}
+
+const SCHEME_CARDS = [...dom['scheme-options'].querySelectorAll('.scheme-card')];
+
+for (const [i, card] of SCHEME_CARDS.entries()) {
+  card.addEventListener('click', () => chooseScheme(card.dataset.scheme));
+  // Number keys need something to point at, and a screen reader benefits from the
+  // shortcut being announced rather than implied by the visual order.
+  card.setAttribute('aria-keyshortcuts', String(i + 1));
+}
+
+/**
+ * The picker has to be answerable by whatever the player is actually holding.
+ *
+ * It is the first thing anyone sees, and it was click-only — which meant a
+ * controller player had to reach for a mouse in order to say "I am using a
+ * controller", which is a silly first impression. The cards are real buttons so
+ * Tab and Enter already worked; this adds 1/2/3 and, when a pad is attached, lets
+ * any button on it both pick the controller option and confirm it.
+ */
+function schemePickerKeys(e) {
+  if (dom['scheme-picker'].classList.contains('hidden')) return;
+  const n = e.code.match(/^(?:Digit|Numpad)([1-3])$/);
+  if (!n) return;
+  e.preventDefault();
+  e.stopPropagation();
+  chooseScheme(SCHEME_CARDS[Number(n[1]) - 1].dataset.scheme);
+}
+window.addEventListener('keydown', schemePickerKeys, true);
+
+/**
+ * Watch for a controller while the picker is open.
+ *
+ * Polled rather than event-driven because the Gamepad API only fires
+ * `gamepadconnected` after a button is pressed, and because a pad plugged in
+ * before the page loaded produces no event at all. Runs only while the modal is
+ * up, so it costs nothing the rest of the time.
+ */
+let schemePadPoll = null;
+
+function watchForPad() {
+  clearInterval(schemePadPoll);
+  schemePadPoll = setInterval(() => {
+    if (dom['scheme-picker'].classList.contains('hidden')) {
+      clearInterval(schemePadPoll);
+      schemePadPoll = null;
+      return;
+    }
+    const pads = navigator.getGamepads?.() ?? [];
+    let pressed = false;
+    let present = false;
+    for (const pad of pads) {
+      if (!pad || pad.mapping !== 'standard') continue;
+      present = true;
+      if (pad.buttons.some((b) => b.pressed)) pressed = true;
+    }
+    if (present) {
+      dom['scheme-note'].textContent = 'Controller detected — press any button on it to use it.';
+    }
+    if (pressed) chooseScheme('pad');
+  }, 120);
+}
+
+// Escape closes it, but only once a scheme exists — there is no sensible state
+// to fall back to on a first visit.
+window.addEventListener('keydown', (e) => {
+  if (e.code !== 'Escape' || dom['scheme-picker'].classList.contains('hidden')) return;
+  if (needsSchemeChoice()) return;
+  e.stopPropagation();
+  closeSchemePicker();
+}, true);
+
 // ------------------------------------------------------------------- settings
 
 dom.nickname.value = settings.nickname;
@@ -211,9 +414,24 @@ dom.nickname.addEventListener('input', () => {
 // is re-synced on any change, because changing the FOV mid-match should be
 // reflected next time you open the main menu.
 const SETTING_PANELS = [
-  { sens: 'sens', fov: 'fov', vol: 'vol', invert: 'invert-y' },
-  { sens: 'p-sens', fov: 'p-fov', vol: 'p-vol', invert: 'p-invert-y' },
+  {
+    sens: 'sens', fov: 'fov', vol: 'vol', invert: 'invert-y',
+    padSens: 'pad-sens', adsToggle: 'ads-toggle', aimAssist: 'aim-assist',
+    shake: 'shake', scheme: 'btn-scheme', schemeName: 'scheme-name',
+  },
+  {
+    sens: 'p-sens', fov: 'p-fov', vol: 'p-vol', invert: 'p-invert-y',
+    padSens: 'p-pad-sens', adsToggle: 'p-ads-toggle', aimAssist: 'p-aim-assist',
+    shake: 'p-shake', scheme: 'p-btn-scheme', schemeName: 'p-scheme-name',
+  },
 ];
+
+/** Human-readable scheme names, for the settings row and the chooser. */
+const SCHEME_NAMES = {
+  mouse: 'Mouse & keyboard',
+  trackpad: 'Laptop trackpad',
+  pad: 'Controller',
+};
 
 function syncSettingInputs() {
   for (const p of SETTING_PANELS) {
@@ -224,6 +442,14 @@ function syncSettingInputs() {
     dom[`${p.sens}-val`].textContent = Number(settings.sensitivity).toFixed(2);
     dom[`${p.fov}-val`].textContent = settings.fov;
     dom[`${p.vol}-val`].textContent = Math.round(settings.volume * 100);
+    dom[p.padSens].value = settings.padSensitivity;
+    dom[`${p.padSens}-val`].textContent = Number(settings.padSensitivity).toFixed(2);
+    dom[p.adsToggle].checked = settings.adsToggle;
+    dom[p.aimAssist].checked = settings.aimAssist;
+    // Reflects what is actually happening, which for the default (null) means
+    // whatever the OS asked for.
+    dom[p.shake].checked = shakeEnabled();
+    dom[p.schemeName].textContent = SCHEME_NAMES[settings.scheme] ?? 'Not set';
   }
 }
 
@@ -251,6 +477,26 @@ for (const p of SETTING_PANELS) {
     commit(() => {
       settings.invertY = dom[p.invert].checked;
     }));
+  dom[p.padSens].addEventListener('input', () =>
+    commit(() => {
+      settings.padSensitivity = Number(dom[p.padSens].value);
+    }));
+  dom[p.adsToggle].addEventListener('change', () =>
+    commit(() => {
+      settings.adsToggle = dom[p.adsToggle].checked;
+      // Changing mode mid-match would otherwise leave the old state stuck on.
+      clearAds();
+    }));
+  dom[p.aimAssist].addEventListener('change', () =>
+    commit(() => {
+      settings.aimAssist = dom[p.aimAssist].checked;
+    }));
+  dom[p.shake].addEventListener('change', () =>
+    commit(() => {
+      // Touching the box turns the OS-following default into an explicit choice.
+      settings.screenShake = dom[p.shake].checked;
+    }));
+  dom[p.scheme].addEventListener('click', () => openSchemePicker());
 }
 
 syncSettingInputs();
@@ -335,16 +581,38 @@ dom['btn-copy-link'].addEventListener('click', async () => {
 
 // ------------------------------------------------------------------- screens
 
-function applyMap(mapId) {
-  app.map = getMap(mapId);
-  loadMap(world, app.map);
-  loadPickups(pickups, app.map);
+/**
+ * Empty every collection that puts objects into the world scene.
+ *
+ * One function because there are two callers — swapping maps and quitting to the
+ * menu — and they had drifted. Quitting a battle royale used to leave 41 health
+ * packs, 14 rovers, the zone rings and the loot markers resident, all of them
+ * still being drawn every frame behind the menu overlay, until the next map load
+ * happened to clear them. Bounded, so not a leak, but a whole island's worth of
+ * geometry kept alive and rendered for nothing.
+ */
+function clearWorldContents() {
   clearRemotePlayers(remotes);
   clearMinimap(minimap);
   clearPickups(pickups);
   clearBattleRoyale(royale);
   clearVehicles(vehicles);
+  clearTracers(tracers);
+  clearImpacts(impacts);
+  clearExplosions(explosions);
   hud.setBattleRoyaleVisible(false);
+}
+
+function applyMap(mapId) {
+  app.map = getMap(mapId);
+  loadMap(world, app.map);
+  clearWorldContents();
+
+  // Built last, and deliberately after the clears. loadPickups() disposes
+  // whatever was there before it builds, so a clearPickups() *after* it deletes
+  // the packs it has just created — which is precisely what used to happen here.
+  // Every map declared its health packs and not one of them ever appeared.
+  loadPickups(pickups, app.map);
 }
 
 function startPractice() {
@@ -400,12 +668,16 @@ function enterMatch() {
 function leaveToMenu() {
   exitLock();
   net.disconnect(connection);
+  // Drop the pad's held state and let a different controller claim the slot.
+  resetGamepad();
+  clearAds();
+  app.lastWorldStates = null;
 
   if (app.range) {
     disposeRange(app.range);
     app.range = null;
   }
-  clearRemotePlayers(remotes);
+  clearWorldContents();
   unloadMap(world);
   app.map = null;
   app.screen = 'menu';
@@ -568,6 +840,19 @@ buildGunPicker();
 
 // ------------------------------------------------------------------- pause
 
+/**
+ * Leave the pause screen. Pointer lock is only worth asking for when a mouse is
+ * driving — a controller has no use for it, and requestPointerLock outside a real
+ * user gesture is refused anyway, which would leave the menu stuck open.
+ */
+function resumeFromPause() {
+  if (padEngaged()) {
+    showPause(false);
+    return;
+  }
+  requestLock();
+}
+
 function pauseVisible() {
   return !dom.pause.classList.contains('hidden');
 }
@@ -631,7 +916,8 @@ function grabPointer() {
   clearTimeout(app.lockCheckTimer);
   app.lockCheckTimer = setTimeout(() => {
     const inGame = app.screen === 'practice' || app.screen === 'match';
-    if (inGame && !input.locked && (app.screen !== 'match' || player.alive)) showPause(true);
+    if (inGame && !input.locked && !padEngaged()
+        && (app.screen !== 'match' || player.alive)) showPause(true);
   }, 600);
 }
 
@@ -756,6 +1042,7 @@ function renderLobby() {
   mapSelect.value = app.map?.id ?? '';
   difficultySelect.value = m.lobby.botDifficulty ?? 'normal';
   mapSelect.classList.toggle('hidden', fixedMap);
+
   const difficultyHint = {
     easy: 'Slower reactions, wider aim error and shorter tracking.',
     normal: 'Balanced reactions, accuracy and target tracking.',
@@ -772,7 +1059,26 @@ function renderLobby() {
   dom['btn-ready'].disabled = !inLobbyPhase;
   modeSelect.disabled = !inLobbyPhase;
   mapSelect.disabled = !inLobbyPhase || fixedMap;
-  difficultySelect.disabled = !inLobbyPhase;
+
+  // Bots. The server has always supported this and reported both counts in the
+  // lobby state; there was simply no control, so the difficulty selector was
+  // configuring opponents that could never be created. Battle royale fills every
+  // empty slot itself and survival spawns its own waves, so neither wants a manual
+  // count.
+  //
+  // This block lives here rather than up with the other host controls because it
+  // needs inLobbyPhase, which is declared below them — reading it earlier is a
+  // temporal dead zone error that throws out of renderLobby halfway through and
+  // silently leaves the rest of the panel unrendered.
+  const manualBots = m.mode !== 'br' && m.mode !== 'waves';
+  const bots = m.lobby.bots ?? 0;
+  const maxBots = m.lobby.maxBots ?? 0;
+  dom['lobby-bots-count'].textContent = String(bots);
+  dom['lobby-bots-row'].classList.toggle('hidden', !manualBots);
+  dom['btn-bots-down'].disabled = !inLobbyPhase || bots <= 0;
+  dom['btn-bots-up'].disabled = !inLobbyPhase || bots >= maxBots;
+  // Difficulty only means anything once somebody is actually using it.
+  difficultySelect.disabled = !inLobbyPhase || (manualBots && bots === 0);
 
   dom['lobby-class'].classList.toggle('hidden', !gunChoiceMatters(m.mode));
   refreshGunPickers();
@@ -868,6 +1174,19 @@ dom['lobby-map-select'].addEventListener('change', () => {
   net.send(connection, C2S.LOBBY_SET, { mapId: dom['lobby-map-select'].value });
 });
 
+/** Ask the server for a different number of bots. It clamps and reconciles. */
+function stepBots(delta) {
+  const current = Number(dom['lobby-bots-count'].textContent) || 0;
+  const max = app.match.lobby.maxBots ?? 0;
+  const want = Math.max(0, Math.min(max, current + delta));
+  if (want === current) return;
+  net.send(connection, C2S.SET_BOTS, { n: want });
+  audio.playClick();
+}
+
+dom['btn-bots-down'].addEventListener('click', () => stepBots(-1));
+dom['btn-bots-up'].addEventListener('click', () => stepBots(1));
+
 dom['lobby-difficulty-select'].addEventListener('change', () => {
   net.send(connection, C2S.LOBBY_SET, {
     botDifficulty: dom['lobby-difficulty-select'].value,
@@ -883,8 +1202,31 @@ net.on(connection, S2C.ERROR, (msg) => {
 
 net.on(connection, 'disconnected', () => {
   if (app.screen === 'menu') return;
+
+  // Hold on to the room before leaveToMenu clears it. A dropped connection is
+  // usually a blip — wifi, or the free tier waking up — and landing on an empty
+  // menu with the code discarded means asking a colleague to read it out again,
+  // which is a silly way to lose a match.
+  //
+  // Whether the room outlives us decides what to offer, and the answer is knowable
+  // rather than a guess: rooms close the moment the last *human* leaves, so a room
+  // where somebody else was playing is still there, and one where we were alone
+  // with the bots has already gone. Offering "press Join" in the second case just
+  // walks the player into "no room called XXXX".
+  const code = app.match.code;
+  const otherHumans = [...app.match.roster.values()]
+    .filter((p) => !p.isBot && p.id !== connection.myId).length;
   leaveToMenu();
-  showError('Lost connection to the server.');
+
+  if (code && otherHumans > 0) {
+    dom['room-code'].value = code;
+    history.replaceState(null, '', `#${code}`);
+    showError(`Lost connection. Press Join to get back into ${code}.`);
+  } else if (code) {
+    showError('Lost connection. That room has closed — start a new one or hit Quick play.');
+  } else {
+    showError('Lost connection to the server.');
+  }
 });
 
 net.on(connection, S2C.JOINED, (msg) => {
@@ -933,6 +1275,8 @@ function applyLobbyState(msg) {
   m.lobby.capacity = msg.capacity ?? MAX_PLAYERS;
   m.lobby.minPlayers = msg.minPlayers ?? 2;
   m.lobby.botDifficulty = msg.botDifficulty ?? m.lobby.botDifficulty;
+  m.lobby.bots = msg.bots ?? 0;
+  m.lobby.maxBots = msg.maxBots ?? 0;
   m.lobby.startsAt = msg.startsInMs > 0 ? performance.now() + msg.startsInMs : 0;
   if (msg.roster) updateRoster(msg.roster);
   if (msg.mapId && msg.mapId !== app.map?.id) applyMap(msg.mapId);
@@ -1355,8 +1699,10 @@ onLockChange((locked) => {
   if (locked) {
     showPause(false);
     audio.resumeAudio();
-  } else if (inGame && !chatIsOpen(chat) && (app.screen !== 'match' || player.alive)) {
-    // Typing releases the lock deliberately; that isn't a request to pause.
+  } else if (inGame && !chatIsOpen(chat) && !padEngaged()
+             && (app.screen !== 'match' || player.alive)) {
+    // Typing releases the lock deliberately; that isn't a request to pause. Nor
+    // is playing on a controller, which never takes pointer lock at all.
     showPause(true);
   } else if (app.screen === 'match' && !player.alive) {
     showPause(false);
@@ -1518,9 +1864,9 @@ function currentFlags() {
   let f = 0;
   if (player.crouching) f |= FLAG.CROUCH;
   if (!player.onGround) f |= FLAG.AIRBORNE;
-  if (input.sprint) f |= FLAG.SPRINT;
+  if (sprintHeld()) f |= FLAG.SPRINT;
   if (input.ads) f |= FLAG.ADS;
-  if (input.firing) f |= FLAG.FIRING;
+  if (firingHeld()) f |= FLAG.FIRING;
   if (!player.alive) f |= FLAG.DEAD;
   if (player.parachuting) f |= FLAG.PARACHUTE;
   if (player.vehicleId !== null) f |= FLAG.VEHICLE;
@@ -1702,6 +2048,58 @@ function frame() {
   step(dt, now);
 }
 
+/**
+ * How much to slow stick aim, based on whether the crosshair is near a target.
+ *
+ * This is rotational aim assist — "sticky aim" — and it is the minimum needed to
+ * make a controller competitive. A mouse has a whole desk of travel to place a
+ * crosshair; a stick has about a centimetre, and the last two degrees onto a head
+ * are the hardest part of the movement. Slowing the turn near a target gives back
+ * some of that precision without ever moving the aim for the player, which is the
+ * line between assistance and aimbotting.
+ *
+ * Returns 1 (no help) unless a live enemy is within the cone and actually visible.
+ * Mouse and trackpad players never see this — it is applied to the pad's
+ * contribution only.
+ */
+const ASSIST_CONE = Math.cos((7 * Math.PI) / 180); // within 7 degrees
+const ASSIST_RANGE = 90;
+const ASSIST_SLOWDOWN = 0.55;
+
+function aimAssistScale(worldStates) {
+  if (!settings.aimAssist || !worldStates || player.vehicleId !== null) return 1;
+  if (!player.alive) return 1;
+
+  const origin = eyePosition(player);
+  const cp = Math.cos(player.pitch);
+  const aim = [
+    -Math.sin(player.yaw) * cp,
+    Math.sin(player.pitch),
+    -Math.cos(player.yaw) * cp,
+  ];
+
+  for (const box of hitboxesFrom(worldStates, connection.myId)) {
+    // Aim at the chest, which is what a player actually tracks.
+    const tx = box.pos[0] - origin[0];
+    const ty = (box.pos[1] + box.height * 0.6) - origin[1];
+    const tz = box.pos[2] - origin[2];
+    const dist = Math.hypot(tx, ty, tz);
+    if (dist < 1 || dist > ASSIST_RANGE) continue;
+
+    const dot = (aim[0] * tx + aim[1] * ty + aim[2] * tz) / dist;
+    if (dot < ASSIST_CONE) continue;
+
+    // Only help when you could actually shoot them. Slowing the aim through a
+    // wall would announce where people are hiding.
+    const dir = [tx / dist, ty / dist, tz / dist];
+    const blocked = raycastBoxes(origin, dir, app.map.solids, dist);
+    if (blocked && blocked.t < dist - 0.5) continue;
+
+    return ASSIST_SLOWDOWN;
+  }
+  return 1;
+}
+
 /** One frame of simulation and rendering. Split out from the rAF wrapper so the
  *  dev console and tests can drive it with an explicit dt. */
 function step(dt, now) {
@@ -1712,6 +2110,25 @@ function step(dt, now) {
     clearPressed();
     renderer.render(world.scene, camera);
     return;
+  }
+
+  // Controller, folded into the same input state the mouse and keyboard use.
+  // Polled before the look is drained so its contribution lands this frame, and
+  // suppressed while paused or typing so a resting stick can't nudge the view.
+  const padSuppressed = pauseVisible() || chatIsOpen(chat);
+  if (padSuppressed) {
+    releaseGamepad();
+    // Still watch START, or the pause menu becomes a one-way door on a pad.
+    pollGamepadPauseOnly();
+  } else {
+    pollGamepads(dt, { lookScale: aimAssistScale(app.lastWorldStates) });
+  }
+
+  if (consumePadPause()) {
+    // START is the controller's Escape. It has to work in both directions,
+    // because a pad player has no other way out of the pause screen.
+    if (pauseVisible()) resumeFromPause();
+    else showPause(true);
   }
 
   // Look is sampled once per frame, not per physics step, so a 200Hz mouse
@@ -1757,6 +2174,14 @@ function step(dt, now) {
 
   const previousWeapon = player.inventory[player.slotIndex];
   const wasReloading = app.wasReloading;
+  // Clicking the right stick goes straight to the knife, which is the one weapon
+  // worth a dedicated button. Resolved by id rather than slot number because the
+  // inventory differs between modes.
+  if (consumePadKnife()) {
+    const knifeSlot = player.inventory.indexOf('knife');
+    if (knifeSlot >= 0) input.weaponSlot = knifeSlot + 1;
+  }
+
   handleWeaponInput(player, now);
 
   // Bookend the reload animation with mechanical clicks — magazine out, and the
@@ -1775,11 +2200,13 @@ function step(dt, now) {
   }
 
   const worldStates = app.screen === 'match' ? net.sampleWorld(connection) : null;
+  app.lastWorldStates = worldStates;
   const spectatorState = app.screen === 'match' ? updateSpectator(worldStates) : null;
 
   const frozen = app.screen === 'match' && app.match.phase !== PHASE.LIVE;
   const combatLocked = app.match.mode === 'br' && combatRemaining(royale, now) > 0;
-  if (input.locked && !frozen && !player.parachuting && player.vehicleId === null && !combatLocked) {
+  const canAct = input.locked || padEngaged();
+  if (canAct && !frozen && !player.parachuting && player.vehicleId === null && !combatLocked) {
     handleFiring(now, worldStates);
   }
   handleEmoteInput(frozen, now);
@@ -1872,8 +2299,9 @@ function step(dt, now) {
   else applyToCamera(player, camera, settings.fov);
 
   // Explosion shake, applied after the camera is otherwise final. Rotational
-  // rather than positional so it can't shove the eye through a wall.
-  if (app.shake > 0.002) {
+  // rather than positional so it can't shove the eye through a wall — and skipped
+  // entirely for anyone who has asked for reduced motion.
+  if (app.shake > 0.002 && shakeEnabled()) {
     const k = app.shake * 0.035;
     camera.rotation.x += (Math.random() - 0.5) * k;
     camera.rotation.y += (Math.random() - 0.5) * k;
@@ -1990,7 +2418,7 @@ function updateMatchHud(now) {
 
   // Tab holds the scoreboard open mid-round.
   if (m.phase === PHASE.LIVE) {
-    if (input.scoreboard) showFullScoreboard();
+    if (scoreboardHeld()) showFullScoreboard();
     else hud.showScoreboard(false);
   }
 
@@ -2016,14 +2444,24 @@ const hashCode = location.hash.replace('#', '').toUpperCase();
 if (/^[A-Z0-9]{4}$/.test(hashCode)) {
   dom['room-code'].value = hashCode;
   dom['menu-footer'].textContent = `Invite code ${hashCode} ready — press Join.`;
+} else if (settings.scheme) {
+  dom['menu-footer'].textContent = schemeSummary(settings.scheme);
 } else {
-  dom['menu-footer'].textContent = 'Desktop only: needs a mouse and keyboard.';
+  dom['menu-footer'].textContent = 'Desktop only: needs a keyboard, and a mouse, trackpad or controller.';
 }
+
+refreshControlHints();
+
+// First visit: ask how they're playing before anything else. Everything behind it
+// still renders, so the menu is visible under the modal and the game isn't
+// pretending to be broken while the question is up.
+if (needsSchemeChoice()) openSchemePicker();
 
 if (import.meta.env.DEV) {
   window.__arena = {
     app, player, world, camera, weaponView, renderer, input, hud, connection, net, remotes, vehicles,
-    startPractice, leaveToMenu, handleFiring, step, enterMultiplayer,
+    startPractice, leaveToMenu, handleFiring, step, enterMultiplayer, aimAssistScale,
+    hasLineOfSight, raycastBoxes,
     forceLock: (v) => { input.locked = v; },
     // Drive the loop by hand: a hidden tab pauses rAF, which is exactly the
     // situation an automated browser is always in.
