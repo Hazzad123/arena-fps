@@ -43,6 +43,7 @@ import {
   createTracers, spawnTracer, updateTracers,
   createImpacts, spawnImpact, updateImpacts, muzzleWorldPosition,
   createExplosions, spawnExplosion, updateExplosions,
+  clearTracers, clearImpacts, clearExplosions,
 } from './weaponView.js';
 import * as hud from './hud.js';
 import {
@@ -192,7 +193,7 @@ for (const id of [
   'p-sens', 'p-sens-val', 'p-fov', 'p-fov-val', 'p-vol', 'p-vol-val', 'p-invert-y',
   'respawn', 'respawn-class', 'respawn-class-picker',
   'spectator', 'spectator-name', 'spectator-prev', 'spectator-next',
-  'scheme-picker', 'scheme-options', 'scheme-note',
+  'scheme-picker', 'scheme-options', 'scheme-note', 'controls-grid',
   'btn-scheme', 'scheme-name', 'pad-sens', 'pad-sens-val', 'ads-toggle', 'aim-assist',
   'p-btn-scheme', 'p-scheme-name', 'p-pad-sens', 'p-pad-sens-val',
   'p-ads-toggle', 'p-aim-assist',
@@ -246,6 +247,50 @@ function practiceHint() {
 function refreshControlHints() {
   const hint = document.querySelector('.pr-hint');
   if (hint) hint.textContent = practiceHint();
+  renderControlsReference();
+}
+
+/**
+ * The in-game controls reference, per scheme.
+ *
+ * Generated rather than written into the HTML, because it used to be hardcoded to
+ * the mouse bindings: a trackpad player would pause, read "fire: LMB", and be told
+ * to do the one thing their scheme deliberately avoids. A reference that disagrees
+ * with the bindings is worse than no reference at all.
+ *
+ * Values are per scheme where they differ and shared where they don't, so the rows
+ * stay in one place and can't drift apart.
+ */
+const CONTROLS_REFERENCE = [
+  ['Move', { mouse: 'W A S D', trackpad: 'W A S D', pad: 'Left stick / W A S D' }],
+  ['Look', { mouse: 'Mouse', trackpad: 'Drag the trackpad', pad: 'Right stick' }],
+  ['Fire', { mouse: 'Hold LMB', trackpad: 'Hold Space', pad: 'RT' }],
+  ['Aim down sights', { mouse: 'Hold RMB', trackpad: 'Q (toggles)', pad: 'LT' }],
+  ['Jump', { mouse: 'Space', trackpad: 'F', pad: 'A' }],
+  ['Sprint / crouch', { mouse: 'Shift / Ctrl or C', trackpad: 'Shift / Ctrl or C', pad: 'L3 / B' }],
+  ['Reload / use', { mouse: 'R / E', trackpad: 'R / E', pad: 'X / Y' }],
+  ['Switch weapon', { mouse: 'Wheel or 1–8', trackpad: 'Wheel or 1–8', pad: 'LB / RB' }],
+  ['Melee', { mouse: 'Knife slot', trackpad: 'Knife slot', pad: 'R3' }],
+  ['Scoreboard', { mouse: 'Hold Tab', trackpad: 'Hold Tab', pad: 'Hold Back' }],
+  ['Chat / team chat', { mouse: 'Enter / Shift+Enter', trackpad: 'Enter / Shift+Enter', pad: 'Enter / Shift+Enter' }],
+  ['Full tactical map', { mouse: 'M', trackpad: 'M', pad: 'M' }],
+  ['Drive / steer', { mouse: 'W S / A D', trackpad: 'W S / A D', pad: 'Left stick' }],
+  ['Wave / yes / no', { mouse: 'Z / X / V', trackpad: 'Z / X / V', pad: 'D-pad ← ↑ ↓' }],
+  ['Pause', { mouse: 'Esc', trackpad: 'Esc', pad: 'Start' }],
+];
+
+function renderControlsReference() {
+  const scheme = settings.scheme ?? 'mouse';
+  const grid = dom['controls-grid'];
+  if (!grid) return;
+  grid.replaceChildren();
+  for (const [label, values] of CONTROLS_REFERENCE) {
+    const name = document.createElement('span');
+    name.textContent = label;
+    const keys = document.createElement('kbd');
+    keys.textContent = values[scheme] ?? values.mouse;
+    grid.append(name, keys);
+  }
 }
 
 function openSchemePicker() {
@@ -462,16 +507,38 @@ dom['btn-copy-link'].addEventListener('click', async () => {
 
 // ------------------------------------------------------------------- screens
 
-function applyMap(mapId) {
-  app.map = getMap(mapId);
-  loadMap(world, app.map);
-  loadPickups(pickups, app.map);
+/**
+ * Empty every collection that puts objects into the world scene.
+ *
+ * One function because there are two callers — swapping maps and quitting to the
+ * menu — and they had drifted. Quitting a battle royale used to leave 41 health
+ * packs, 14 rovers, the zone rings and the loot markers resident, all of them
+ * still being drawn every frame behind the menu overlay, until the next map load
+ * happened to clear them. Bounded, so not a leak, but a whole island's worth of
+ * geometry kept alive and rendered for nothing.
+ */
+function clearWorldContents() {
   clearRemotePlayers(remotes);
   clearMinimap(minimap);
   clearPickups(pickups);
   clearBattleRoyale(royale);
   clearVehicles(vehicles);
+  clearTracers(tracers);
+  clearImpacts(impacts);
+  clearExplosions(explosions);
   hud.setBattleRoyaleVisible(false);
+}
+
+function applyMap(mapId) {
+  app.map = getMap(mapId);
+  loadMap(world, app.map);
+  clearWorldContents();
+
+  // Built last, and deliberately after the clears. loadPickups() disposes
+  // whatever was there before it builds, so a clearPickups() *after* it deletes
+  // the packs it has just created — which is precisely what used to happen here.
+  // Every map declared its health packs and not one of them ever appeared.
+  loadPickups(pickups, app.map);
 }
 
 function startPractice() {
@@ -536,7 +603,7 @@ function leaveToMenu() {
     disposeRange(app.range);
     app.range = null;
   }
-  clearRemotePlayers(remotes);
+  clearWorldContents();
   unloadMap(world);
   app.map = null;
   app.screen = 'menu';
@@ -1028,8 +1095,31 @@ net.on(connection, S2C.ERROR, (msg) => {
 
 net.on(connection, 'disconnected', () => {
   if (app.screen === 'menu') return;
+
+  // Hold on to the room before leaveToMenu clears it. A dropped connection is
+  // usually a blip — wifi, or the free tier waking up — and landing on an empty
+  // menu with the code discarded means asking a colleague to read it out again,
+  // which is a silly way to lose a match.
+  //
+  // Whether the room outlives us decides what to offer, and the answer is knowable
+  // rather than a guess: rooms close the moment the last *human* leaves, so a room
+  // where somebody else was playing is still there, and one where we were alone
+  // with the bots has already gone. Offering "press Join" in the second case just
+  // walks the player into "no room called XXXX".
+  const code = app.match.code;
+  const otherHumans = [...app.match.roster.values()]
+    .filter((p) => !p.isBot && p.id !== connection.myId).length;
   leaveToMenu();
-  showError('Lost connection to the server.');
+
+  if (code && otherHumans > 0) {
+    dom['room-code'].value = code;
+    history.replaceState(null, '', `#${code}`);
+    showError(`Lost connection. Press Join to get back into ${code}.`);
+  } else if (code) {
+    showError('Lost connection. That room has closed — start a new one or hit Quick play.');
+  } else {
+    showError('Lost connection to the server.');
+  }
 });
 
 net.on(connection, S2C.JOINED, (msg) => {
