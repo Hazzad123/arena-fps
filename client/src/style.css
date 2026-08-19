@@ -2364,3 +2364,26 @@ button.ghost.small b {
   color: var(--text);
   border-color: var(--line-hot);
 }
+
+/* Bot count stepper in the lobby's host controls. Small counts, so a stepper is
+   clearer than a slider and needs no live label of its own. */
+.bot-stepper {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.bot-stepper button {
+  padding: 0.15rem 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  line-height: 1.2;
+  min-width: 2rem;
+}
+
+.bot-stepper b {
+  font-family: var(--mono);
+  font-size: 1rem;
+  min-width: 2ch;
+  text-align: center;
+}

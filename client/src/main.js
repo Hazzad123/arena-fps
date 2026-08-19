@@ -14,7 +14,7 @@ import {
   ALL_WEAPON_IDS, getWeapon, PRIMARY_IDS, getPrimary,
   WEAPON_TYPES, weaponsOfType,
 } from '@shared/weapons.js';
-import { raycastBoxes, raycastPlayers } from '@shared/collision.js';
+import { raycastBoxes, raycastPlayers, hasLineOfSight } from '@shared/collision.js';
 import { C2S, S2C, PHASE, FLAG, MODE_NAMES, hasFlag } from '@shared/protocol.js';
 
 import {
@@ -138,6 +138,9 @@ const app = {
       minPlayers: 2,
       botDifficulty: 'normal',
       startsAt: 0,
+      // AI in the room, and how many more would fit. Both come from the server.
+      bots: 0,
+      maxBots: 0,
     },
   },
   pendingReports: { fallDamage: 0, void: false },
@@ -187,6 +190,7 @@ for (const id of [
   'lobby-code', 'lobby-mode', 'lobby-count', 'lobby-slots', 'lobby-status',
   'lobby-host', 'lobby-mode-select', 'lobby-map-select',
   'lobby-difficulty-select', 'lobby-difficulty-hint', 'lobby-class', 'lobby-class-picker',
+  'lobby-bots-count', 'btn-bots-down', 'btn-bots-up', 'lobby-bots-row',
   'btn-copy-link', 'btn-leave', 'btn-ready', 'btn-start',
   'pause', 'pause-note', 'pause-class', 'pause-class-picker', 'pause-guns',
   'pause-gun-picker', 'pause-settings', 'btn-resume', 'btn-quit', 'btn-to-lobby',
@@ -1038,6 +1042,7 @@ function renderLobby() {
   mapSelect.value = app.map?.id ?? '';
   difficultySelect.value = m.lobby.botDifficulty ?? 'normal';
   mapSelect.classList.toggle('hidden', fixedMap);
+
   const difficultyHint = {
     easy: 'Slower reactions, wider aim error and shorter tracking.',
     normal: 'Balanced reactions, accuracy and target tracking.',
@@ -1054,7 +1059,26 @@ function renderLobby() {
   dom['btn-ready'].disabled = !inLobbyPhase;
   modeSelect.disabled = !inLobbyPhase;
   mapSelect.disabled = !inLobbyPhase || fixedMap;
-  difficultySelect.disabled = !inLobbyPhase;
+
+  // Bots. The server has always supported this and reported both counts in the
+  // lobby state; there was simply no control, so the difficulty selector was
+  // configuring opponents that could never be created. Battle royale fills every
+  // empty slot itself and survival spawns its own waves, so neither wants a manual
+  // count.
+  //
+  // This block lives here rather than up with the other host controls because it
+  // needs inLobbyPhase, which is declared below them — reading it earlier is a
+  // temporal dead zone error that throws out of renderLobby halfway through and
+  // silently leaves the rest of the panel unrendered.
+  const manualBots = m.mode !== 'br' && m.mode !== 'waves';
+  const bots = m.lobby.bots ?? 0;
+  const maxBots = m.lobby.maxBots ?? 0;
+  dom['lobby-bots-count'].textContent = String(bots);
+  dom['lobby-bots-row'].classList.toggle('hidden', !manualBots);
+  dom['btn-bots-down'].disabled = !inLobbyPhase || bots <= 0;
+  dom['btn-bots-up'].disabled = !inLobbyPhase || bots >= maxBots;
+  // Difficulty only means anything once somebody is actually using it.
+  difficultySelect.disabled = !inLobbyPhase || (manualBots && bots === 0);
 
   dom['lobby-class'].classList.toggle('hidden', !gunChoiceMatters(m.mode));
   refreshGunPickers();
@@ -1150,6 +1174,19 @@ dom['lobby-map-select'].addEventListener('change', () => {
   net.send(connection, C2S.LOBBY_SET, { mapId: dom['lobby-map-select'].value });
 });
 
+/** Ask the server for a different number of bots. It clamps and reconciles. */
+function stepBots(delta) {
+  const current = Number(dom['lobby-bots-count'].textContent) || 0;
+  const max = app.match.lobby.maxBots ?? 0;
+  const want = Math.max(0, Math.min(max, current + delta));
+  if (want === current) return;
+  net.send(connection, C2S.SET_BOTS, { n: want });
+  audio.playClick();
+}
+
+dom['btn-bots-down'].addEventListener('click', () => stepBots(-1));
+dom['btn-bots-up'].addEventListener('click', () => stepBots(1));
+
 dom['lobby-difficulty-select'].addEventListener('change', () => {
   net.send(connection, C2S.LOBBY_SET, {
     botDifficulty: dom['lobby-difficulty-select'].value,
@@ -1238,6 +1275,8 @@ function applyLobbyState(msg) {
   m.lobby.capacity = msg.capacity ?? MAX_PLAYERS;
   m.lobby.minPlayers = msg.minPlayers ?? 2;
   m.lobby.botDifficulty = msg.botDifficulty ?? m.lobby.botDifficulty;
+  m.lobby.bots = msg.bots ?? 0;
+  m.lobby.maxBots = msg.maxBots ?? 0;
   m.lobby.startsAt = msg.startsInMs > 0 ? performance.now() + msg.startsInMs : 0;
   if (msg.roster) updateRoster(msg.roster);
   if (msg.mapId && msg.mapId !== app.map?.id) applyMap(msg.mapId);
@@ -2422,6 +2461,7 @@ if (import.meta.env.DEV) {
   window.__arena = {
     app, player, world, camera, weaponView, renderer, input, hud, connection, net, remotes, vehicles,
     startPractice, leaveToMenu, handleFiring, step, enterMultiplayer, aimAssistScale,
+    hasLineOfSight, raycastBoxes,
     forceLock: (v) => { input.locked = v; },
     // Drive the loop by hand: a hidden tab pauses rAF, which is exactly the
     // situation an automated browser is always in.
