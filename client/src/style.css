@@ -2176,3 +2176,167 @@ select:focus {
   #hud-bottom-right { right: 12px; bottom: 12px; }
   #full-map { width: min(94vw, 76vh); }
 }
+
+/* ============================================================
+   Control scheme chooser
+
+   Appended last so it picks up the active theme variables. Sits above
+   everything including the menu, because it has to be answered first —
+   the three devices need different bindings, and guessing wrong makes the
+   game feel broken rather than merely unfamiliar.
+   ============================================================ */
+
+#scheme-picker {
+  position: fixed;
+  inset: 0;
+  z-index: 60; /* above the menu and the scanline overlay */
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: radial-gradient(circle at 50% 40%, rgba(8, 34, 27, 0.96), rgba(3, 8, 6, 0.99));
+  overflow-y: auto;
+}
+
+#scheme-picker.hidden {
+  display: none;
+}
+
+#scheme-inner {
+  width: min(96vw, 880px);
+  padding: 1.8rem 1.6rem 1.5rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  text-align: center;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.7);
+}
+
+#scheme-inner h2 {
+  margin: 0.7rem 0 0.35rem;
+  font-size: 1.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.scheme-tagline {
+  margin: 0 auto 1.4rem;
+  max-width: 46ch;
+  font-size: 0.86rem;
+  color: var(--muted);
+}
+
+#scheme-options {
+  display: grid;
+  /* Three across on a desktop, stacking on narrow windows without a query. */
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 0.8rem;
+}
+
+.scheme-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 1.2rem 0.9rem 1rem;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.12s, transform 0.12s, background 0.12s;
+}
+
+.scheme-card:hover,
+.scheme-card:focus-visible {
+  border-color: var(--line-hot);
+  background: rgba(66, 239, 168, 0.07);
+  transform: translateY(-2px);
+  outline: none;
+}
+
+/* The platform guess only highlights a card — it never decides. */
+.scheme-card.recommended {
+  border-color: var(--line-hot);
+}
+
+/* Pinned to the corner rather than sitting in the flow, so highlighting a card
+   doesn't reflow its contents relative to the other two. */
+.scheme-card {
+  position: relative;
+}
+
+.scheme-card.recommended::after {
+  content: "LIKELY";
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  font-size: 0.55rem;
+  letter-spacing: 0.14em;
+  color: #04140f;
+  background: var(--accent);
+  padding: 0 0.28rem;
+  border-radius: 2px;
+}
+
+.scheme-icon {
+  font-size: 1.9rem;
+  line-height: 1;
+}
+
+.scheme-card b {
+  font-size: 1rem;
+  letter-spacing: 0.04em;
+}
+
+.scheme-sub {
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.scheme-keys {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--line);
+  width: 100%;
+  font-size: 0.7rem;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.scheme-keys em {
+  font-style: normal;
+  font-family: var(--mono);
+  color: var(--text);
+}
+
+#scheme-note {
+  margin-top: 1.1rem;
+  min-height: 1.1rem;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+/* ---- the Controls row inside both settings panels ---- */
+
+.setting-group {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin: 0.55rem 0;
+}
+
+.setting-label {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+button.ghost.small {
+  padding: 0.28rem 0.55rem;
+  font-size: 0.74rem;
+}
+
+button.ghost.small b {
+  color: var(--text);
+}

@@ -19,6 +19,7 @@
 
 import { box, crateStack, prop, barrel, stairs } from './helpers.js';
 import { compileBoxes, playerOverlapsAny } from '../collision.js';
+import { VEHICLE_HITBOX } from '../vehicles.js';
 import { BR_MAX_PLAYERS, PLAYER_HEIGHT, PLAYER_RADIUS } from '../constants.js';
 
 const C = {
@@ -685,11 +686,29 @@ function healthPacks(boxes) {
 }
 
 /** Road rovers are spread between districts, never inside authored cover. */
+// A rover has to be placed against its own footprint, not a person's. It is 2.3m
+// across and 3.4m long against a player's 0.8m diameter, so validating with
+// PLAYER_RADIUS — as this did originally — cleared points that left four of the
+// fourteen rovers with their chassis inside a building. Rovers spawn at yaw 0, so
+// the long axis is what matters; the height comes from the hitbox too, since a
+// rover is short enough to sit under overhangs a standing player could not.
+const VEHICLE_PLACE_RADIUS = Math.max(
+  Math.abs(VEHICLE_HITBOX.min[0]), VEHICLE_HITBOX.max[0],
+  Math.abs(VEHICLE_HITBOX.min[2]), VEHICLE_HITBOX.max[2],
+);
+const VEHICLE_PLACE_HEIGHT = VEHICLE_HITBOX.max[1] - VEHICLE_HITBOX.min[1];
+
 function vehicleSpawns(boxes) {
   const solids = compileBoxes(boxes);
   const out = [];
   const half = (GRID - 1) / 2;
-  const offsets = [[24, 24], [-24, -24], [24, -24], [-24, 24], [0, 25], [25, 0]];
+  // More candidates than before: the rover needs a genuinely open patch, so a
+  // district with one clear corner for a player may have none for a vehicle, and
+  // the search has to be able to give up on a cell rather than force a bad spot.
+  const offsets = [
+    [24, 24], [-24, -24], [24, -24], [-24, 24], [0, 25], [25, 0], [-25, 0], [0, -25],
+    [18, 18], [-18, -18], [18, -18], [-18, 18], [30, 12], [-30, -12], [12, 30], [-12, -30],
+  ];
   for (let gx = 0; gx < GRID && out.length < 14; gx++) {
     for (let gz = 0; gz < GRID && out.length < 14; gz++) {
       if ((gx * 3 + gz * 5) % 6 !== 0) continue;
@@ -697,7 +716,11 @@ function vehicleSpawns(boxes) {
       const cz = (gz - half) * CELL;
       const point = offsets
         .map(([dx, dz]) => [cx + dx, 0, cz + dz])
-        .find((p) => !playerOverlapsAny(p, PLAYER_HEIGHT, PLAYER_RADIUS, solids));
+        .find((p) => !playerOverlapsAny(p, VEHICLE_PLACE_HEIGHT, VEHICLE_PLACE_RADIUS, solids)
+          // Keep the approach clear too, or you spawn nose-to-wall and can't pull
+          // away. A player-sized probe is right here: this is about the gap the
+          // rover drives through, not the space it occupies.
+          && !playerOverlapsAny([p[0], p[1], p[2] + 3], PLAYER_HEIGHT, PLAYER_RADIUS, solids));
       if (point) out.push(point);
     }
   }

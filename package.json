@@ -1,6 +1,7 @@
 {
   "name": "arena-fps",
   "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "Browser multiplayer arena FPS — no accounts, share a link, 3 minute rounds.",

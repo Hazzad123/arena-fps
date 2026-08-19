@@ -11,25 +11,71 @@ import { loadModel, instantiate } from './models.js';
 
 const UNIT_CUBE = new THREE.BoxGeometry(1, 1, 1);
 const SURFACE_PLANE = new THREE.PlaneGeometry(1, 1);
-const SKYBOX_FACES = ['px.png', 'nx.png', 'py.png', 'ny.png', 'pz.png', 'nz.png'];
-let skyboxPromise = null;
+// The sky is generated, not loaded.
+//
+// It used to be a six-face cubemap with no licence file and no traceable source,
+// which is not something to be redistributing from a public repo. Generating it
+// costs nothing, weighs nothing, and is actually better suited to the game: each
+// map already declares a skyColor and a fogColor, so the gradient can be built
+// from the map's own palette and the horizon always matches the fog it fades into.
+const SKY_RADIUS = 4000;
+const SKY_STOPS = 64;
 
-function loadSkybox() {
-  if (!skyboxPromise) {
-    skyboxPromise = new THREE.CubeTextureLoader()
-      .setPath('textures/sky_14/')
-      .loadAsync(SKYBOX_FACES)
-      .then((texture) => {
-        texture.colorSpace = THREE.SRGBColorSpace;
-        texture.minFilter = THREE.LinearMipmapLinearFilter;
-        texture.generateMipmaps = true;
-        return texture;
-      })
-      // A colour fallback keeps the game playable if a static host ever drops
-      // an asset during deployment.
-      .catch(() => null);
-  }
-  return skyboxPromise;
+/**
+ * A vertical gradient from the fog colour at the horizon to the sky colour
+ * overhead, drawn into a 1-pixel-wide canvas and stretched across a sphere.
+ *
+ * Rendered on the inside of the sphere with depth writing off, so it sits behind
+ * everything without needing to be sorted against the level.
+ */
+function createSky(skyColor, fogColor) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1;
+  canvas.height = SKY_STOPS;
+  const ctx = canvas.getContext('2d');
+
+  const top = new THREE.Color(skyColor);
+  const horizon = new THREE.Color(fogColor);
+  // Lift the zenith slightly and settle the horizon down, which is what stops a
+  // flat two-colour blend from reading as a wall.
+  const zenith = top.clone().multiplyScalar(0.82);
+  const band = horizon.clone().lerp(top, 0.35);
+
+  const gradient = ctx.createLinearGradient(0, 0, 0, SKY_STOPS);
+  gradient.addColorStop(0, `#${zenith.getHexString()}`);
+  gradient.addColorStop(0.55, `#${top.getHexString()}`);
+  gradient.addColorStop(0.86, `#${band.getHexString()}`);
+  gradient.addColorStop(1, `#${horizon.getHexString()}`);
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 1, SKY_STOPS);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  // One pixel wide, so horizontal wrapping is meaningless; clamping avoids a
+  // seam where the sphere's UVs meet.
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(SKY_RADIUS, 24, 16),
+    new THREE.MeshBasicMaterial({
+      map: texture,
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+    }),
+  );
+  mesh.frustumCulled = false;
+  // Drawn first, so it can never occlude the level.
+  mesh.renderOrder = -1;
+  return mesh;
+}
+
+function disposeSky(mesh) {
+  if (!mesh) return;
+  mesh.geometry.dispose();
+  mesh.material.map?.dispose();
+  mesh.material.dispose();
 }
 
 // ---------------------------------------------------------------- surfaces
@@ -53,12 +99,18 @@ function loadSkybox() {
 // already carry their colour, so it's low — just enough that a red spawn wall is
 // still recognisably red. `concrete` is the desaturated one and takes the map's
 // colour almost whole.
+//
+// The first five names used to point at a "50 Free Stylized Wall Textures" pack
+// that shipped with no licence file of any kind. Redistributing that from a public
+// repo isn't defensible, so they were repointed at the Screaming Brain Studios
+// packs, which are explicitly CC0 and already here. The names are unchanged
+// because every map references them by name — only the source file moved.
 const TEXTURES = {
-  brick: { file: 'brick', metres: 5, tint: 0.3 },
-  blockwork: { file: 'blockwork', metres: 5, tint: 0.3 },
-  cobbles: { file: 'cobbles', metres: 4, tint: 0.25 },
-  redbrick: { file: 'redbrick', metres: 5, tint: 0.2 },
-  concrete: { file: 'concrete', metres: 6, tint: 0.88 },
+  brick: { file: 'sbs/brick', metres: 5, tint: 0.3 },
+  blockwork: { file: 'sbs/stone', metres: 5, tint: 0.3 },
+  cobbles: { file: 'sbs/pavers', metres: 4, tint: 0.25 },
+  redbrick: { file: 'sbs/brick', metres: 5, tint: 0.2 },
+  concrete: { file: 'sbs/plaster', metres: 6, tint: 0.88 },
   asphalt: { file: 'sbs/asphalt', metres: 7, tint: 0.42 },
   sbsbrick: { file: 'sbs/brick', metres: 4.5, tint: 0.28 },
   dirt: { file: 'sbs/dirt', metres: 5, tint: 0.36 },
@@ -162,7 +214,7 @@ export function createWorld(renderer) {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
 
-  return { scene, hemi, sun, current: null };
+  return { scene, hemi, sun, current: null, sky: null };
 }
 
 /**
@@ -220,12 +272,13 @@ export function loadMap(world, map) {
   });
 
   // ---- atmosphere ----
+  // A flat colour behind the gradient sphere, so there is never a frame of void
+  // while the sky mesh is being built.
   world.scene.background = new THREE.Color(map.skyColor);
-  loadSkybox().then((texture) => {
-    // Map rotation can happen while six faces are loading. Only apply the
-    // result to the map that is still current.
-    if (texture && world.current?.map === map) world.scene.background = texture;
-  });
+  disposeSky(world.sky);
+  world.sky = createSky(map.skyColor, map.fogColor);
+  world.scene.add(world.sky);
+
   world.scene.fog = new THREE.FogExp2(map.fogColor, map.fogDensity ?? 0.01);
   world.hemi.intensity = map.ambientLight ?? 0.6;
   // Downward-facing surfaces take the hemisphere's ground colour, and on an
@@ -635,6 +688,13 @@ function disposeGroup(group) {
 }
 
 export function unloadMap(world) {
+  // The sky is per-map (it's built from the map's palette) and lives outside
+  // world.current, so it has to be released even when there's no map loaded.
+  if (world.sky) {
+    world.scene.remove(world.sky);
+    disposeSky(world.sky);
+    world.sky = null;
+  }
   if (!world.current) return;
   const { mesh, props, surfaces } = world.current;
   world.scene.remove(mesh);

@@ -173,7 +173,7 @@
           <summary>Settings</summary>
           <label class="slider">
             <span>Mouse sensitivity <b id="sens-val">1.00</b></span>
-            <input id="sens" type="range" min="0.2" max="3" step="0.05" />
+            <input id="sens" type="range" min="0.2" max="4" step="0.05" />
           </label>
           <label class="slider">
             <span>Field of view <b id="fov-val">80</b></span>
@@ -187,9 +187,70 @@
             <input id="invert-y" type="checkbox" />
             <span>Invert vertical look</span>
           </label>
+          <div class="setting-group">
+            <span class="setting-label">Controls</span>
+            <button id="btn-scheme" class="ghost small" type="button">
+              <b id="scheme-name">Mouse &amp; keyboard</b> — change
+            </button>
+          </div>
+          <label class="slider">
+            <span>Stick sensitivity <b id="pad-sens-val">1.00</b></span>
+            <input id="pad-sens" type="range" min="0.3" max="3" step="0.05" />
+          </label>
+          <label class="check">
+            <input id="ads-toggle" type="checkbox" />
+            <span>Aim is a toggle, not a hold</span>
+          </label>
+          <label class="check">
+            <input id="aim-assist" type="checkbox" />
+            <span>Aim assist (controller only)</span>
+          </label>
         </details>
       </div>
       <footer id="menu-footer"></footer>
+    </div>
+
+    <!-- ================= control scheme chooser =================
+         Shown once, before anything else, because the three devices need
+         genuinely different bindings and guessing wrong makes the game feel
+         broken rather than merely unfamiliar. Reopenable from Settings. -->
+    <div id="scheme-picker" class="hidden">
+      <div id="scheme-inner">
+        <div class="system-kicker"><span>INPUT CALIBRATION</span><b>SELECT</b></div>
+        <h2>How are you playing?</h2>
+        <p class="scheme-tagline">This changes the controls, not just the sensitivity. You can switch any time in Settings.</p>
+
+        <div id="scheme-options">
+          <button class="scheme-card" data-scheme="mouse">
+            <span class="scheme-icon">🖱️</span>
+            <b>Mouse &amp; keyboard</b>
+            <span class="scheme-sub">The standard setup</span>
+            <span class="scheme-keys">
+              <em>Hold click</em> fire · <em>Right-click</em> aim · <em>Space</em> jump
+            </span>
+          </button>
+
+          <button class="scheme-card" data-scheme="trackpad">
+            <span class="scheme-icon">💻</span>
+            <b>Laptop trackpad</b>
+            <span class="scheme-sub">No right-click needed</span>
+            <span class="scheme-keys">
+              <em>Space</em> fire · <em>Q</em> aim (toggle) · <em>F</em> jump
+            </span>
+          </button>
+
+          <button class="scheme-card" data-scheme="pad">
+            <span class="scheme-icon">🎮</span>
+            <b>Controller</b>
+            <span class="scheme-sub">Xbox, PlayStation or similar</span>
+            <span class="scheme-keys">
+              <em>RT</em> fire · <em>LT</em> aim · <em>A</em> jump · aim assist on
+            </span>
+          </button>
+        </div>
+
+        <div id="scheme-note"></div>
+      </div>
     </div>
 
     <!-- ================= lobby ================= -->
@@ -295,7 +356,7 @@
           <summary>Settings</summary>
           <label class="slider">
             <span>Mouse sensitivity <b id="p-sens-val">1.00</b></span>
-            <input id="p-sens" type="range" min="0.2" max="3" step="0.05" />
+            <input id="p-sens" type="range" min="0.2" max="4" step="0.05" />
           </label>
           <label class="slider">
             <span>Field of view <b id="p-fov-val">80</b></span>
@@ -308,6 +369,24 @@
           <label class="check">
             <input id="p-invert-y" type="checkbox" />
             <span>Invert vertical look</span>
+          </label>
+          <div class="setting-group">
+            <span class="setting-label">Controls</span>
+            <button id="p-btn-scheme" class="ghost small" type="button">
+              <b id="p-scheme-name">Mouse &amp; keyboard</b> — change
+            </button>
+          </div>
+          <label class="slider">
+            <span>Stick sensitivity <b id="p-pad-sens-val">1.00</b></span>
+            <input id="p-pad-sens" type="range" min="0.3" max="3" step="0.05" />
+          </label>
+          <label class="check">
+            <input id="p-ads-toggle" type="checkbox" />
+            <span>Aim is a toggle, not a hold</span>
+          </label>
+          <label class="check">
+            <input id="p-aim-assist" type="checkbox" />
+            <span>Aim assist (controller only)</span>
           </label>
         </details>
 
