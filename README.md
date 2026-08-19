@@ -61,6 +61,17 @@ for you, and it won't engage through a wall, which would otherwise quietly revea
 where people are hiding. It applies to stick input only, so mouse and trackpad
 players are unaffected, and it can be switched off in Settings.
 
+**Accessibility.** Aim can be a toggle rather than a hold in any scheme, not just
+the trackpad one. Camera shake follows `prefers-reduced-motion` by default —
+rotational shake on a first-person camera is a common motion-sickness trigger, and
+if you've told your OS to reduce motion you shouldn't have to say it again — with
+a manual override either way. The control-scheme chooser answers to `1`–`3`, to
+Tab and Enter, or to any button on a connected controller, so picking "Controller"
+never requires reaching for a mouse.
+
+The in-game reference under Settings → Controls is generated from the active
+scheme, so it always shows the bindings you actually have.
+
 ### Everything else
 
 | | |
