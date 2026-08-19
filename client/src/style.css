@@ -2067,6 +2067,10 @@ select:focus {
 
 #full-map {
   position: absolute;
+  /* Above the HUD text. Neither carried a z-index, so DOM order decided it and
+     the round timer and state banner painted straight over the map's header,
+     cutting off its title. Stays below the menus (30) and the scheme picker (60). */
+  z-index: 20;
   left: 50%;
   top: 50%;
   width: min(78vh, 78vw, 760px);
