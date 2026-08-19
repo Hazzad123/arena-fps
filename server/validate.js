@@ -26,7 +26,7 @@ import {
   LEG_MULTIPLIER,
 } from '../shared/constants.js';
 import { hasLineOfSight } from '../shared/collision.js';
-import { getWeapon, damageAtDistance } from '../shared/weapons.js';
+import { maybeWeapon, damageAtDistance } from '../shared/weapons.js';
 
 const MAX_TELEPORT = 4.0; // metres of slack before we call it a teleport
 const MAX_SHOT_ORIGIN_DRIFT = 2.5;
@@ -96,7 +96,7 @@ export function validateMove(player, incoming, map, dtSeconds, maxSpeed = MAX_VA
  * Returns { ok, damage, reason }.
  */
 export function validateHit({ room, shooter, victim, weaponId, zone, map }) {
-  const weapon = getWeapon(weaponId);
+  const weapon = maybeWeapon(weaponId);
   if (!weapon) return { ok: false, reason: 'unknown-weapon' };
 
   // You can only shoot what you're holding.
@@ -151,14 +151,14 @@ export function validateHit({ room, shooter, victim, weaponId, zone, map }) {
  * tampered client can't report a hundred pellets from one shotgun shell.
  */
 export function capPelletCount(weaponId, reported) {
-  const weapon = getWeapon(weaponId);
+  const weapon = maybeWeapon(weaponId);
   if (!weapon) return 0;
   return Math.min(reported, weapon.pellets);
 }
 
 /** Reject a client claiming to shoot faster than the weapon allows. */
 export function validateFireRate(player, weaponId, now) {
-  const weapon = getWeapon(weaponId);
+  const weapon = maybeWeapon(weaponId);
   if (!weapon) return false;
   // 15% tolerance absorbs clock skew and jitter between the two machines.
   const interval = (60_000 / weapon.rpm) * 0.85;

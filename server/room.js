@@ -41,6 +41,10 @@ import {
 
 const TICK_MS = 1000 / SERVER_TICK_HZ;
 
+// Rejections inside a five-second window before the server says something.
+// High enough that ordinary jitter never trips it.
+const REJECT_WARN_THRESHOLD = 25;
+
 // Phase durations, overridable by env so a test run can cycle whole rounds in
 // seconds instead of three minutes. Server-only file, so process.env is safe
 // here — never do this in shared/, which the browser also imports.
@@ -98,6 +102,10 @@ export class Room {
     // Consecutive tick failures. A room that cannot tick is a room nobody can
     // play in, so it gets closed rather than left looping and filling the log.
     this.tickFailures = 0;
+
+    // Movement updates thrown away, across everyone who has been here. Surfaced
+    // in summary() so /api/rooms can answer "is this room rubber-banding?".
+    this.rejectedMoveTotal = 0;
 
     this.timer = setInterval(() => this.safeTick(), TICK_MS);
     // Don't hold the process open on an idle room.
@@ -1336,7 +1344,7 @@ export class Room {
       maxSpeed,
     );
     if (!result.ok) {
-      player.rejectedMoves++;
+      this.noteRejectedMove(player, result.reason, now);
       // Leave the last known good position in place; a brief stall reads far
       // better than yanking someone across the map.
       return;
@@ -1508,6 +1516,33 @@ export class Room {
       for (const index of new Set(msg.b)) {
         if (Number.isInteger(index)) this.hitBarrel(index, player);
       }
+    }
+  }
+
+  /**
+   * Record a thrown-away movement update.
+   *
+   * The counter this replaces was incremented and never read anywhere, which made
+   * the whole situation invisible: a rejected player simply stops moving on
+   * everyone else's screen, and nothing on the server says why. That reads as the
+   * game being broken, and it is the single hardest thing to diagnose after the
+   * fact — "it froze for a second" with no record of it.
+   *
+   * Logged on a rolling window rather than per rejection, so an honest hiccup on
+   * hotel wifi stays quiet while a sustained problem announces itself once.
+   */
+  noteRejectedMove(player, reason, now) {
+    player.rejectedMoves += 1;
+    this.rejectedMoveTotal += 1;
+
+    player.rejectWindow = (player.rejectWindow ?? []).filter((t) => now - t < 5000);
+    player.rejectWindow.push(now);
+
+    if (player.rejectWindow.length === REJECT_WARN_THRESHOLD) {
+      console.warn(
+        `room ${this.code}: ${player.name} had ${REJECT_WARN_THRESHOLD} moves rejected `
+        + `in 5s (latest: ${reason}) — bad connection, or a client sending nonsense`,
+      );
     }
   }
 
@@ -1721,14 +1756,31 @@ export class Room {
   }
 
   /** Everything a spectating or joining client needs to render the match. */
+  /**
+   * One room, as the room list sees it.
+   *
+   * Both numbers here were wrong. `capacity` was the module-level ROOM_CAPACITY,
+   * which is MAX_PLAYERS — so a thirty-slot battle royale room advertised itself as
+   * holding eight. And `players` was players.size, which counts AI: a battle
+   * royale with one person and twenty-nine bots reported "30 players", so anyone
+   * reading the list would think it was full when there was one human in it.
+   *
+   * `humans` is the honest occupancy and `players` is kept as the total, because
+   * "how busy is this room" and "how many bodies are in it" are different
+   * questions and the list wants both.
+   */
   summary() {
     return {
       code: this.code,
       mode: this.mode,
       mapId: this.mapId,
       phase: this.phase,
+      humans: this.humanCount(),
       players: this.players.size,
-      capacity: modes.ROOM_CAPACITY,
+      capacity: this.capacity(),
+      // Non-zero means somebody's movement updates are being thrown away — see
+      // noteRejectedMove. Useful when a player reports rubber-banding.
+      rejectedMoves: this.rejectedMoveTotal,
     };
   }
 }
