@@ -302,13 +302,18 @@ function openSchemePicker() {
     card.classList.toggle('recommended', highlight);
   }
   dom['scheme-note'].textContent = padConnected()
-    ? 'Controller detected.'
-    : 'Pick whichever matches how you are sitting right now.';
+    ? 'Controller detected — press any button on it to use it.'
+    : 'Click, press 1–3, or Tab and Enter.';
   dom['scheme-picker'].classList.remove('hidden');
+  // Focus the highlighted card so Tab and Enter start somewhere sensible.
+  dom['scheme-options'].querySelector('.scheme-card.recommended')?.focus();
+  watchForPad();
 }
 
 function closeSchemePicker() {
   dom['scheme-picker'].classList.add('hidden');
+  clearInterval(schemePadPoll);
+  schemePadPoll = null;
 }
 
 function chooseScheme(scheme) {
@@ -322,8 +327,65 @@ function chooseScheme(scheme) {
   closeSchemePicker();
 }
 
-for (const card of dom['scheme-options'].querySelectorAll('.scheme-card')) {
+const SCHEME_CARDS = [...dom['scheme-options'].querySelectorAll('.scheme-card')];
+
+for (const [i, card] of SCHEME_CARDS.entries()) {
   card.addEventListener('click', () => chooseScheme(card.dataset.scheme));
+  // Number keys need something to point at, and a screen reader benefits from the
+  // shortcut being announced rather than implied by the visual order.
+  card.setAttribute('aria-keyshortcuts', String(i + 1));
+}
+
+/**
+ * The picker has to be answerable by whatever the player is actually holding.
+ *
+ * It is the first thing anyone sees, and it was click-only — which meant a
+ * controller player had to reach for a mouse in order to say "I am using a
+ * controller", which is a silly first impression. The cards are real buttons so
+ * Tab and Enter already worked; this adds 1/2/3 and, when a pad is attached, lets
+ * any button on it both pick the controller option and confirm it.
+ */
+function schemePickerKeys(e) {
+  if (dom['scheme-picker'].classList.contains('hidden')) return;
+  const n = e.code.match(/^(?:Digit|Numpad)([1-3])$/);
+  if (!n) return;
+  e.preventDefault();
+  e.stopPropagation();
+  chooseScheme(SCHEME_CARDS[Number(n[1]) - 1].dataset.scheme);
+}
+window.addEventListener('keydown', schemePickerKeys, true);
+
+/**
+ * Watch for a controller while the picker is open.
+ *
+ * Polled rather than event-driven because the Gamepad API only fires
+ * `gamepadconnected` after a button is pressed, and because a pad plugged in
+ * before the page loaded produces no event at all. Runs only while the modal is
+ * up, so it costs nothing the rest of the time.
+ */
+let schemePadPoll = null;
+
+function watchForPad() {
+  clearInterval(schemePadPoll);
+  schemePadPoll = setInterval(() => {
+    if (dom['scheme-picker'].classList.contains('hidden')) {
+      clearInterval(schemePadPoll);
+      schemePadPoll = null;
+      return;
+    }
+    const pads = navigator.getGamepads?.() ?? [];
+    let pressed = false;
+    let present = false;
+    for (const pad of pads) {
+      if (!pad || pad.mapping !== 'standard') continue;
+      present = true;
+      if (pad.buttons.some((b) => b.pressed)) pressed = true;
+    }
+    if (present) {
+      dom['scheme-note'].textContent = 'Controller detected — press any button on it to use it.';
+    }
+    if (pressed) chooseScheme('pad');
+  }, 120);
 }
 
 // Escape closes it, but only once a scheme exists — there is no sensible state

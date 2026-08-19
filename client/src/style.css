@@ -2344,3 +2344,23 @@ button.ghost.small {
 button.ghost.small b {
   color: var(--text);
 }
+
+/* The 1/2/3 shortcut on each chooser card. Top-left, opposite the LIKELY badge. */
+.scheme-key {
+  position: absolute;
+  top: 0.4rem;
+  left: 0.45rem;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 0 0.28rem;
+  line-height: 1.35;
+}
+
+.scheme-card:hover .scheme-key,
+.scheme-card:focus-visible .scheme-key {
+  color: var(--text);
+  border-color: var(--line-hot);
+}
