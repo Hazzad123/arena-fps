@@ -51,6 +51,36 @@ function noiseSource() {
   return src;
 }
 
+// The quietest shot worth building a node graph for.
+//
+// This used to be 0.002, which sounds like a reasonable floor and is in practice
+// no floor at all: with the 1/(1+0.06d) attenuation, a typical 0.25-gain weapon
+// only falls below it at about two kilometres, and Crown Island is 540m across. So
+// every shot from all thirty players was assembling six-odd audio nodes, however
+// far away and however inaudible. 0.012 is roughly where a shot stops being
+// audible at all against the master gain, and it cuts a 0.25-gain weapon at ~260m
+// — still the far side of most maps.
+const AUDIBLE_FLOOR = 0.012;
+
+// Concurrency budget. Thirty players on automatics is around three hundred shots a
+// second, and each one creates and tears down a small graph; past a certain rate
+// the extra voices are inaudible mush that costs real CPU on a weak laptop. Shots
+// are dropped rather than queued, because a late gunshot is worse than none.
+const VOICE_WINDOW_S = 0.05;
+const VOICE_BUDGET = 12;
+let voiceWindowStart = 0;
+let voicesThisWindow = 0;
+
+function claimVoice(t) {
+  if (t - voiceWindowStart > VOICE_WINDOW_S) {
+    voiceWindowStart = t;
+    voicesThisWindow = 0;
+  }
+  if (voicesThisWindow >= VOICE_BUDGET) return false;
+  voicesThisWindow += 1;
+  return true;
+}
+
 /**
  * A gunshot. `audio` comes from the weapon table: { kind, freq, decay, gain }.
  * `pan` is -1..1 and `distance` in metres; both default to "it's your own gun".
@@ -60,7 +90,8 @@ export function playShot(audioSpec, { pan = 0, distance = 0 } = {}) {
   const t = now();
   const atten = 1 / (1 + distance * 0.06);
   const gain = audioSpec.gain * atten;
-  if (gain < 0.002) return;
+  if (gain < AUDIBLE_FLOOR) return;
+  if (!claimVoice(t)) return;
 
   const out = ctx.createGain();
   out.gain.value = 1;
