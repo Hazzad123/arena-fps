@@ -44,6 +44,11 @@ const DEFAULTS = {
   // Slow the aim near a target, for stick users only. Without it a pad simply
   // cannot compete with a mouse in an aim duel.
   aimAssist: true,
+  // Camera shake. Null means "follow the OS setting", which is the right default:
+  // someone who has asked their system to reduce motion has already told us, and
+  // making them find a checkbox in a game menu to say it again is rude. An
+  // explicit true/false is a deliberate override of that.
+  screenShake: null,
 };
 
 function clamp(v, lo, hi) {
@@ -66,6 +71,8 @@ function load() {
       padSensitivity: clamp(Number(parsed.padSensitivity) || 1, 0.3, 3),
       adsToggle: Boolean(parsed.adsToggle),
       aimAssist: parsed.aimAssist === undefined ? true : Boolean(parsed.aimAssist),
+      screenShake: parsed.screenShake === null || parsed.screenShake === undefined
+        ? null : Boolean(parsed.screenShake),
     };
   } catch {
     // Corrupt or blocked storage shouldn't stop someone playing.
@@ -120,6 +127,19 @@ export function guessScheme() {
   const mac = /Mac/i.test(navigator.platform ?? '') || /Mac OS X/i.test(navigator.userAgent ?? '');
   if (mac && !matchMedia('(pointer: coarse)').matches) return 'trackpad';
   return 'mouse';
+}
+
+/**
+ * Whether to shake the camera.
+ *
+ * Rotational shake on a first-person camera is a common motion-sickness trigger,
+ * and `prefers-reduced-motion` exists precisely so applications don't have to ask
+ * again. Honoured unless the player has explicitly overridden it either way.
+ */
+export function shakeEnabled() {
+  if (settings.screenShake !== null) return settings.screenShake;
+  if (typeof matchMedia !== 'function') return true;
+  return !matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 /** A friendly fallback so nobody is forced to type a name to play. */

@@ -19,7 +19,7 @@ import { C2S, S2C, PHASE, FLAG, MODE_NAMES, hasFlag } from '@shared/protocol.js'
 
 import {
   settings, saveSettings, ensureNickname,
-  applyScheme, needsSchemeChoice, guessScheme,
+  applyScheme, needsSchemeChoice, guessScheme, shakeEnabled,
 } from './settings.js';
 import {
   initInput, input, requestLock, exitLock, onLockChange,
@@ -196,7 +196,7 @@ for (const id of [
   'scheme-picker', 'scheme-options', 'scheme-note', 'controls-grid',
   'btn-scheme', 'scheme-name', 'pad-sens', 'pad-sens-val', 'ads-toggle', 'aim-assist',
   'p-btn-scheme', 'p-scheme-name', 'p-pad-sens', 'p-pad-sens-val',
-  'p-ads-toggle', 'p-aim-assist',
+  'p-ads-toggle', 'p-aim-assist', 'shake', 'p-shake',
 ]) dom[id] = document.getElementById(id);
 
 dom['spectator-prev'].addEventListener('click', () => {
@@ -351,12 +351,12 @@ const SETTING_PANELS = [
   {
     sens: 'sens', fov: 'fov', vol: 'vol', invert: 'invert-y',
     padSens: 'pad-sens', adsToggle: 'ads-toggle', aimAssist: 'aim-assist',
-    scheme: 'btn-scheme', schemeName: 'scheme-name',
+    shake: 'shake', scheme: 'btn-scheme', schemeName: 'scheme-name',
   },
   {
     sens: 'p-sens', fov: 'p-fov', vol: 'p-vol', invert: 'p-invert-y',
     padSens: 'p-pad-sens', adsToggle: 'p-ads-toggle', aimAssist: 'p-aim-assist',
-    scheme: 'p-btn-scheme', schemeName: 'p-scheme-name',
+    shake: 'p-shake', scheme: 'p-btn-scheme', schemeName: 'p-scheme-name',
   },
 ];
 
@@ -380,6 +380,9 @@ function syncSettingInputs() {
     dom[`${p.padSens}-val`].textContent = Number(settings.padSensitivity).toFixed(2);
     dom[p.adsToggle].checked = settings.adsToggle;
     dom[p.aimAssist].checked = settings.aimAssist;
+    // Reflects what is actually happening, which for the default (null) means
+    // whatever the OS asked for.
+    dom[p.shake].checked = shakeEnabled();
     dom[p.schemeName].textContent = SCHEME_NAMES[settings.scheme] ?? 'Not set';
   }
 }
@@ -421,6 +424,11 @@ for (const p of SETTING_PANELS) {
   dom[p.aimAssist].addEventListener('change', () =>
     commit(() => {
       settings.aimAssist = dom[p.aimAssist].checked;
+    }));
+  dom[p.shake].addEventListener('change', () =>
+    commit(() => {
+      // Touching the box turns the OS-following default into an explicit choice.
+      settings.screenShake = dom[p.shake].checked;
     }));
   dom[p.scheme].addEventListener('click', () => openSchemePicker());
 }
@@ -2190,8 +2198,9 @@ function step(dt, now) {
   else applyToCamera(player, camera, settings.fov);
 
   // Explosion shake, applied after the camera is otherwise final. Rotational
-  // rather than positional so it can't shove the eye through a wall.
-  if (app.shake > 0.002) {
+  // rather than positional so it can't shove the eye through a wall — and skipped
+  // entirely for anyone who has asked for reduced motion.
+  if (app.shake > 0.002 && shakeEnabled()) {
     const k = app.shake * 0.035;
     camera.rotation.x += (Math.random() - 0.5) * k;
     camera.rotation.y += (Math.random() - 0.5) * k;
